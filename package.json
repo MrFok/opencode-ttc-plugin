@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "smoke:e2e": "node scripts/smoke-e2e.mjs",
+    "load:conformance": "node scripts/load-conformance.mjs"
   },
   "engines": {
     "node": ">=20"

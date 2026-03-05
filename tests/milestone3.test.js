@@ -4,8 +4,10 @@ import { spawn } from "node:child_process";
 import test from "node:test";
 import assert from "node:assert/strict";
 
+let nextPort = 20000;
 function randomPort() {
-  return 20000 + Math.floor(Math.random() * 10000);
+  nextPort += 1;
+  return nextPort;
 }
 
 function readJsonBody(req) {
