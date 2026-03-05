@@ -51,6 +51,9 @@ const LOCAL_TEST_MODE = loadEnvironment();
 
 const PORT = Number.parseInt(process.env.PORT ?? "8080", 10);
 const PROXY_API_KEY = process.env.PROXY_API_KEY ?? "";
+const PROXY_API_KEY_HEADER = (process.env.PROXY_API_KEY_HEADER ?? "authorization").trim().toLowerCase();
+const RELAY_MODE = (process.env.RELAY_MODE ?? "").trim().toLowerCase();
+const RELAY_SINGLE_BASE_URL = RELAY_MODE === "single_base_url";
 const UPSTREAM_BASE_URL = (process.env.UPSTREAM_BASE_URL ?? "https://api.openai.com").replace(/\/$/, "");
 const UPSTREAM_API_KEY = process.env.UPSTREAM_API_KEY ?? "";
 const ENABLE_COMPRESSION = process.env.ENABLE_COMPRESSION !== "false";
@@ -262,9 +265,27 @@ function getBearerToken(authorizationHeader) {
   return token;
 }
 
+function getHeaderValue(headers, headerName) {
+  if (!headerName) return "";
+  const value = headers[headerName];
+  if (Array.isArray(value)) {
+    return String(value[0] ?? "");
+  }
+  return String(value ?? "");
+}
+
+function getProxyToken(req) {
+  const authHeaderValue = getHeaderValue(req.headers, PROXY_API_KEY_HEADER);
+  if (!authHeaderValue) return "";
+  if (PROXY_API_KEY_HEADER === "authorization") {
+    return getBearerToken(authHeaderValue);
+  }
+  return authHeaderValue.trim();
+}
+
 function isProxyAuthorized(req) {
   if (!PROXY_API_KEY) return true;
-  const token = getBearerToken(req.headers.authorization);
+  const token = getProxyToken(req);
   return token === PROXY_API_KEY;
 }
 
@@ -1587,6 +1608,155 @@ function buildUpstreamEmbeddingsUrl(providerConfig) {
   return `${base}/v1/embeddings`;
 }
 
+function buildUpstreamRelayUrl(providerConfig, requestPathWithQuery) {
+  const base = providerConfig.baseURL;
+  if (base.endsWith("/v1") && requestPathWithQuery.startsWith("/v1/")) {
+    return `${base}${requestPathWithQuery.slice(3)}`;
+  }
+  if (base.endsWith("/v1") && requestPathWithQuery === "/v1") {
+    return base;
+  }
+  return `${base}${requestPathWithQuery}`;
+}
+
+function canRequestHaveBody(method) {
+  const upper = String(method ?? "").toUpperCase();
+  return upper !== "GET" && upper !== "HEAD";
+}
+
+async function handleGenericRelay(req, res, requestPathWithQuery, requestPathname) {
+  const startedAt = Date.now();
+  const requestId = randomUUID();
+  const traceId = String(req.headers["x-trace-id"] ?? "");
+  stats.requests_total += 1;
+
+  if (!isProxyAuthorized(req)) {
+    logEvent("warn", "proxy.request.failed", {
+      request_id: requestId,
+      trace_id: traceId,
+      method: req.method,
+      path: requestPathname,
+      status_code: 401,
+      outcome: "unauthorized"
+    });
+    sendJson(res, 401, openAiError("Invalid proxy API key", "authentication_error", "invalid_api_key"));
+    return;
+  }
+
+  let rawBody = Buffer.alloc(0);
+  if (canRequestHaveBody(req.method)) {
+    try {
+      rawBody = await readRawBody(req);
+    } catch {
+      logEvent("warn", "proxy.request.failed", {
+        request_id: requestId,
+        trace_id: traceId,
+        method: req.method,
+        path: requestPathname,
+        status_code: 400,
+        outcome: "invalid_body"
+      });
+      sendJson(res, 400, openAiError("Failed to read request body", "invalid_request_error", "invalid_body"));
+      return;
+    }
+  }
+
+  const parsedPayload = rawBody.byteLength > 0 ? parseJsonBody(rawBody) : null;
+  const requestedModel = String(parsedPayload?.model ?? "");
+  const selectedRoute = resolveModelRoute(requestedModel);
+  const provider = selectedRoute.provider;
+
+  let upstreamHeaders;
+  try {
+    upstreamHeaders = rawBody.byteLength > 0
+      ? buildUpstreamHeaders(req, requestId, rawBody.byteLength, provider)
+      : buildUpstreamGetHeaders(req, requestId, provider);
+  } catch {
+    sendJson(
+      res,
+      401,
+      openAiError("Missing upstream API key for selected provider", "authentication_error", "missing_upstream_api_key")
+    );
+    return;
+  }
+
+  const upstreamUrl = buildUpstreamRelayUrl(provider, requestPathWithQuery);
+  const attemptController = new AbortController();
+  const timeout = setTimeout(() => {
+    attemptController.abort(new Error("upstream_total_timeout"));
+  }, UPSTREAM_TOTAL_TIMEOUT_MS);
+
+  try {
+    const upstreamResponse = await fetch(upstreamUrl, {
+      method: req.method,
+      headers: upstreamHeaders,
+      body: rawBody.byteLength > 0 ? rawBody : undefined,
+      signal: attemptController.signal
+    });
+
+    clearTimeout(timeout);
+    res.statusCode = upstreamResponse.status;
+    copyUpstreamHeaders(upstreamResponse, res);
+    res.setHeader("x-proxy-request-id", requestId);
+    const responseBuffer = await readUpstreamBody(upstreamResponse);
+    res.end(responseBuffer);
+
+    logEvent("info", "proxy.request.completed", {
+      request_id: requestId,
+      trace_id: traceId,
+      method: req.method,
+      path: requestPathname,
+      status_code: upstreamResponse.status,
+      upstream_status_code: upstreamResponse.status,
+      duration_ms: Date.now() - startedAt,
+      outcome: upstreamResponse.status >= 400 ? "upstream_error" : "success",
+      upstream: {
+        attempts: 1,
+        retries: 0,
+        fallbacks: 0,
+        selected_model: requestedModel || null,
+        selected_provider: provider.id,
+        selected_status: upstreamResponse.status,
+        reason_codes: [`relay_${selectedRoute.reason}`]
+      },
+      compression: {
+        enabled: false,
+        attempted_count: 0,
+        applied_count: 0,
+        fallback_count: 0,
+        skipped_count: 0,
+        reason_codes: ["relay_unmodified"],
+        model: TOKEN_COMPANY_MODEL,
+        aggressiveness: TOKEN_COMPANY_AGGRESSIVENESS,
+        input_chars_before: 0,
+        input_chars_after: 0,
+        reduction_pct: 0
+      }
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    const isAbort = error?.name === "AbortError";
+    if (isAbort) {
+      markUpstreamTimeout();
+    }
+    logEvent("error", "proxy.request.failed", {
+      request_id: requestId,
+      trace_id: traceId,
+      method: req.method,
+      path: requestPathname,
+      status_code: 502,
+      outcome: isAbort ? "upstream_timeout" : "upstream_network_error",
+      upstream: {
+        attempts: 1,
+        retries: 0,
+        fallbacks: 0,
+        reason_codes: [isAbort ? "upstream_total_timeout" : "upstream_network_error"]
+      }
+    });
+    sendJson(res, 502, openAiError("Upstream relay request failed", "api_error", "upstream_unreachable"));
+  }
+}
+
 function normalizeModelEntry(rawModel, aliasMap) {
   if (!rawModel || typeof rawModel !== "object") return null;
   const id = String(rawModel.id ?? "").trim();
@@ -1788,6 +1958,8 @@ const server = createServer(async (req, res) => {
       model_route_rules_count: MODEL_ROUTE_RULES.length,
       model_fallback_rules: Object.fromEntries(MODEL_FALLBACK_RULES.entries()),
       models_source_mode: MODELS_SOURCE_MODE,
+      relay_mode: RELAY_MODE || "standard",
+      relay_single_base_url: RELAY_SINGLE_BASE_URL,
       models_cache_ttl_ms: MODELS_CACHE_TTL_MS,
       models_allowlist_count: MODELS_ALLOWLIST.size,
       models_denylist_count: MODELS_DENYLIST.size
@@ -1830,6 +2002,11 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (RELAY_SINGLE_BASE_URL && path.startsWith("/v1/")) {
+    await handleGenericRelay(req, res, `${path}${urlObj.search}`, path);
+    return;
+  }
+
   sendJson(res, 404, openAiError("Endpoint not found", "invalid_request_error", "not_found"));
 });
 
@@ -1841,7 +2018,10 @@ server.listen(PORT, () => {
   logEvent("info", "proxy.server.started", {
     listen_url: `http://localhost:${PORT}`,
     upstream_base_url: UPSTREAM_BASE_URL,
+    relay_mode: RELAY_MODE || "standard",
+    relay_single_base_url: RELAY_SINGLE_BASE_URL,
     proxy_auth_required: Boolean(PROXY_API_KEY),
+    proxy_auth_header: PROXY_API_KEY ? PROXY_API_KEY_HEADER : null,
     local_test_mode: LOCAL_TEST_MODE,
     compression_enabled: ENABLE_COMPRESSION,
     upstream_max_retries: UPSTREAM_MAX_RETRIES,

@@ -195,3 +195,96 @@ test("chat streaming contract preserves SSE framing", async () => {
     await new Promise((resolve) => upstream.close(resolve));
   }
 });
+
+test("single relay mode forwards unknown /v1 routes", async () => {
+  const upstreamPort = randomPort();
+  const proxyPort = randomPort();
+
+  let seenPath = "";
+  let seenBody = null;
+  const upstream = createServer(async (req, res) => {
+    seenPath = String(req.url ?? "");
+    seenBody = await readJsonBody(req);
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ ok: true, echoed: seenBody?.input ?? null }));
+  });
+  await once(upstream.listen(upstreamPort), "listening");
+
+  const proxy = startProxy(proxyPort, `http://127.0.0.1:${upstreamPort}`, {
+    RELAY_MODE: "single_base_url"
+  });
+
+  try {
+    await waitForHealthy(proxyPort);
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/v1/realtime/sessions?mode=test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: "hello relay" })
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(seenPath, "/v1/realtime/sessions?mode=test");
+    assert.deepEqual(seenBody, { input: "hello relay" });
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.echoed, "hello relay");
+  } finally {
+    proxy.kill("SIGTERM");
+    await once(proxy, "exit");
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});
+
+test("supports separate proxy auth header and upstream bearer passthrough", async () => {
+  const upstreamPort = randomPort();
+  const proxyPort = randomPort();
+
+  let upstreamAuth = "";
+  const upstream = createServer(async (req, res) => {
+    await readJsonBody(req);
+    upstreamAuth = String(req.headers.authorization ?? "");
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json");
+    res.end(
+      JSON.stringify({
+        id: "chatcmpl-auth",
+        object: "chat.completion",
+        created: 1,
+        model: "m-auth",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }]
+      })
+    );
+  });
+  await once(upstream.listen(upstreamPort), "listening");
+
+  const proxy = startProxy(proxyPort, `http://127.0.0.1:${upstreamPort}`, {
+    PROXY_API_KEY: "proxy-secret",
+    PROXY_API_KEY_HEADER: "x-proxy-key",
+    UPSTREAM_API_KEY: ""
+  });
+
+  try {
+    await waitForHealthy(proxyPort);
+    const response = await fetch(`http://127.0.0.1:${proxyPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Proxy-Key": "proxy-secret",
+        Authorization: "Bearer upstream-client-token"
+      },
+      body: JSON.stringify({
+        model: "m-auth",
+        stream: false,
+        messages: [{ role: "user", content: "auth test" }]
+      })
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(upstreamAuth, "Bearer upstream-client-token");
+  } finally {
+    proxy.kill("SIGTERM");
+    await once(proxy, "exit");
+    await new Promise((resolve) => upstream.close(resolve));
+  }
+});

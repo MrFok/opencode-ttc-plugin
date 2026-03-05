@@ -22,6 +22,8 @@ OpenAI-compatible proxy for IDE workflows (Cursor-compatible) that can apply saf
 - `GET /stats`
 - `GET /debug/logs` (local mode)
 
+When `RELAY_MODE=single_base_url`, all unmatched `/v1/*` routes are relayed upstream unchanged.
+
 ## Milestone 2 Features
 - Safe-mode selective compression for `/v1/chat/completions` request messages
 - Conservative default: compress only `user` role content (`COMPRESS_ROLES` configurable)
@@ -81,6 +83,7 @@ OpenAI-compatible proxy for IDE workflows (Cursor-compatible) that can apply saf
 
 ## Environment Variables
 - `PORT` (default `8080`)
+- `RELAY_MODE` (`single_base_url` enables generic `/v1/*` relay passthrough)
 - `UPSTREAM_BASE_URL` (default `https://api.openai.com`)
 - `UPSTREAM_API_KEY` (recommended; if empty, proxy forwards client Bearer token)
 - `UPSTREAM_MAX_RETRIES` (default `2`)
@@ -101,6 +104,7 @@ OpenAI-compatible proxy for IDE workflows (Cursor-compatible) that can apply saf
 - `MODELS_ALIASES_JSON` (JSON map of model id to display name)
 - `MODELS_STATIC_JSON` (JSON array of model objects for static mode)
 - `PROXY_API_KEY` (optional, enables proxy-level auth)
+- `PROXY_API_KEY_HEADER` (default `authorization`; set `x-proxy-key` to keep `Authorization` for upstream passthrough)
 - `TOKEN_COMPANY_API_KEY` (used in Milestone 2)
 - `LOCAL_TEST_MODE` (`true` enables `.env.local` preference)
 - `ENABLE_COMPRESSION` (`true`/`false`)
@@ -117,6 +121,28 @@ OpenAI-compatible proxy for IDE workflows (Cursor-compatible) that can apply saf
 - `LOG_LEVEL` (`debug|info|warn|error`)
 - `LOG_BUFFER_SIZE` (in-memory log ring size, default `500`)
 - `LOG_LOCAL_ENDPOINT` (enable `GET /debug/logs` in non-production)
+
+## Single Base URL Relay Mode
+- Use this mode for Cursor and OpenAI-compatible API key clients when you want guaranteed interception before upstream.
+- Example env:
+
+```env
+RELAY_MODE=single_base_url
+UPSTREAM_BASE_URL=https://api.openai.com
+UPSTREAM_API_KEY=
+PROXY_API_KEY=
+ENABLE_COMPRESSION=true
+```
+
+- Cursor setup:
+  - Enable OpenAI API key mode
+  - Override OpenAI Base URL: `http://localhost:8080/v1`
+  - Use your regular model IDs (for example `gpt-5.3-codex`)
+
+- If you need proxy auth and upstream bearer passthrough at the same time:
+  - Set `PROXY_API_KEY=<secret>`
+  - Set `PROXY_API_KEY_HEADER=x-proxy-key`
+  - Send `X-Proxy-Key: <secret>` to proxy and keep `Authorization: Bearer <upstream-token>` for upstream.
 
 ## Local Test Mode
 - When `LOCAL_TEST_MODE=true` (or when `.env.local` exists and `NODE_ENV` is not `production`), the proxy loads `.env.local` first.
@@ -167,6 +193,19 @@ PROVIDER_CONFIG_STRICT=true
   - `npm run smoke:e2e`
 - Run basic load conformance checks:
   - `npm run load:conformance`
+
+## OpenCode Model Sync
+- Sync your local OpenCode provider model list from proxy `GET /v1/models`:
+  - `npm run sync:opencode-models`
+- Default behavior syncs only OpenAI-compatible model IDs (`openai/*` gets rewritten to plain IDs like `gpt-5.3-codex`).
+- Useful overrides:
+  - `PROXY_BASE_URL` (default `http://localhost:8080/v1`)
+  - `PROXY_TEST_API_KEY` (default `local-test`; leave empty if proxy auth is disabled)
+  - `OPENCODE_PROVIDER_ID` (default `localproxy`)
+  - `OPENCODE_PROVIDER_NAME` (default `Local LLM Proxy`)
+  - `OPENCODE_CONFIG_PATH` (default `~/.config/opencode/opencode.json`)
+  - `SYNC_MODELS_TIMEOUT_MS` (default `15000`)
+  - `SYNC_MODEL_PROFILE` (`openai` default, or `all` to keep raw upstream IDs)
 
 ## Local Logs Endpoint
 - Endpoint: `GET /debug/logs`
