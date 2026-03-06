@@ -18,6 +18,10 @@ export function resolveCompressionConfig(...args) {
   return testApi.resolveCompressionConfig(...args);
 }
 
+export function resolveLockedBaseUrl(...args) {
+  return testApi.resolveLockedBaseUrl(...args);
+}
+
 export function getAuthStorePath(...args) {
   return testApi.getAuthStorePath(...args);
 }

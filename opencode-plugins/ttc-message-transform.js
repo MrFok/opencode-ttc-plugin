@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const AUTH_PROVIDER_ID = "the-token-company-plugin";
+const LOCKED_BASE_URL = "https://api.thetokencompany.com";
 
 const COMPRESSION_LEVELS = {
   low: 0.05,
@@ -79,6 +80,83 @@ function clampAggressiveness(value) {
 function normalizeCompressionLevel(level) {
   const normalized = String(level ?? "").trim().toLowerCase();
   return Object.prototype.hasOwnProperty.call(COMPRESSION_LEVELS, normalized) ? normalized : "";
+}
+
+function summarizeUrlForLog(rawValue) {
+  const raw = String(rawValue ?? "").trim();
+  if (!raw) return "empty";
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}${parsed.pathname}`;
+  } catch {
+    return "malformed";
+  }
+}
+
+function resolveLockedBaseUrl(rawValue) {
+  if (!hasEnvValue(rawValue)) {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: false,
+      reason: ""
+    };
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(String(rawValue).trim());
+  } catch {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: true,
+      reason: "malformed"
+    };
+  }
+
+  if (parsed.protocol !== "https:") {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: true,
+      reason: "protocol_not_https"
+    };
+  }
+
+  if (parsed.hostname !== "api.thetokencompany.com") {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: true,
+      reason: "host_not_allowed"
+    };
+  }
+
+  if (parsed.port && parsed.port !== "443") {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: true,
+      reason: "port_not_allowed"
+    };
+  }
+
+  if (parsed.pathname !== "/" && parsed.pathname !== "") {
+    return {
+      baseUrl: LOCKED_BASE_URL,
+      source: "default",
+      rejected: true,
+      reason: "path_not_allowed"
+    };
+  }
+
+  return {
+    baseUrl: LOCKED_BASE_URL,
+    source: "validated_env",
+    rejected: false,
+    reason: ""
+  };
 }
 
 function toNumber(value) {
@@ -192,10 +270,15 @@ function recordProcessedPart(stats, { charsBefore, charsAfter, compressed, fallb
 }
 
 function buildTtcPluginConfig(env = process.env) {
+  const baseUrlResolution = resolveLockedBaseUrl(env.TTC_BASE_URL);
   return {
     enabled: parseBoolean(env.TTC_ENABLED, DEFAULT_CONFIG.enabled),
     apiKey: String(env.TTC_API_KEY ?? ""),
-    baseUrl: String(env.TTC_BASE_URL ?? DEFAULT_CONFIG.baseUrl).replace(/\/$/, ""),
+    baseUrl: baseUrlResolution.baseUrl,
+    baseUrlSource: baseUrlResolution.source,
+    baseUrlRejected: baseUrlResolution.rejected,
+    baseUrlRejectReason: baseUrlResolution.reason,
+    baseUrlProvidedSummary: summarizeUrlForLog(env.TTC_BASE_URL),
     model: String(env.TTC_MODEL ?? DEFAULT_CONFIG.model),
     aggressiveness: parseFloatValue(env.TTC_AGGRESSIVENESS, DEFAULT_CONFIG.aggressiveness),
     minChars: parseIntValue(env.TTC_MIN_CHARS, DEFAULT_CONFIG.minChars),
@@ -637,11 +720,21 @@ const TtcMessageTransformPlugin = async ({ client }) => {
   const cache = new Map();
   const sessionStats = new Map();
 
+  if (config.baseUrlRejected) {
+    await logEvent(client, "warn", "ttc.plugin.config_invalid", {
+      field: "TTC_BASE_URL",
+      provided: config.baseUrlProvidedSummary,
+      reason_code: config.baseUrlRejectReason,
+      using: LOCKED_BASE_URL
+    });
+  }
+
   await logEvent(client, "info", "ttc.plugin.init", {
     enabled: config.enabled,
     has_api_key: Boolean(config.apiKey),
     auth_provider_id: AUTH_PROVIDER_ID,
     auth_source: apiKeyResolution.source,
+    base_url_source: config.baseUrlSource,
     compression_source: compressionResolution.source,
     compression_level: compressionResolution.level || "custom",
     base_url: config.baseUrl,
@@ -716,6 +809,7 @@ TtcMessageTransformPlugin._test = {
   getPluginConfigPath,
   resolvePluginSettings,
   resolveCompressionConfig,
+  resolveLockedBaseUrl,
   getAuthStorePath,
   resolveApiKeyFromAuthStore,
   resolveEffectiveApiKey,

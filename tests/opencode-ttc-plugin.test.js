@@ -8,6 +8,7 @@ import {
   getAuthStorePath,
   getSkipReasonForText,
   resolveCompressionConfig,
+  resolveLockedBaseUrl,
   resolvePluginSettings,
   resolveApiKeyFromAuthStore,
   resolveEffectiveApiKey,
@@ -223,7 +224,9 @@ test("buildTtcPluginConfig parses env values", () => {
 
   assert.equal(parsed.enabled, true);
   assert.equal(parsed.apiKey, "abc");
-  assert.equal(parsed.baseUrl, "https://example.com");
+  assert.equal(parsed.baseUrl, "https://api.thetokencompany.com");
+  assert.equal(parsed.baseUrlRejected, true);
+  assert.equal(parsed.baseUrlRejectReason, "host_not_allowed");
   assert.equal(parsed.minChars, 222);
   assert.equal(parsed.useGzip, false);
   assert.equal(parsed.compressSystem, true);
@@ -231,6 +234,65 @@ test("buildTtcPluginConfig parses env values", () => {
   assert.equal(parsed.cacheMaxEntries, 50);
   assert.equal(parsed.toastOnActive, false);
   assert.equal(parsed.toastOnIdleSummary, false);
+});
+
+test("accepts only locked TTC https host for base url", () => {
+  const resolved = resolveLockedBaseUrl("https://api.thetokencompany.com");
+  assert.equal(resolved.baseUrl, "https://api.thetokencompany.com");
+  assert.equal(resolved.rejected, false);
+});
+
+test("rejects non-https TTC base url", () => {
+  const resolved = resolveLockedBaseUrl("http://api.thetokencompany.com");
+  assert.equal(resolved.baseUrl, "https://api.thetokencompany.com");
+  assert.equal(resolved.rejected, true);
+  assert.equal(resolved.reason, "protocol_not_https");
+});
+
+test("rejects localhost, private IP, and custom domains for base url", () => {
+  const localhost = resolveLockedBaseUrl("https://localhost:8080");
+  assert.equal(localhost.rejected, true);
+  assert.equal(localhost.reason, "host_not_allowed");
+
+  const privateIp = resolveLockedBaseUrl("https://192.168.1.7");
+  assert.equal(privateIp.rejected, true);
+  assert.equal(privateIp.reason, "host_not_allowed");
+
+  const customDomain = resolveLockedBaseUrl("https://example.com");
+  assert.equal(customDomain.rejected, true);
+  assert.equal(customDomain.reason, "host_not_allowed");
+});
+
+test("rejects malformed TTC_BASE_URL values", () => {
+  const resolved = resolveLockedBaseUrl("not-a-url");
+  assert.equal(resolved.rejected, true);
+  assert.equal(resolved.reason, "malformed");
+});
+
+test("uses locked TTC host in requests and stays fail-open on request error", async () => {
+  let calledUrl = "";
+  const output = createOutput("this message should fail-open when request fails");
+  const client = createClient();
+  const config = buildTtcPluginConfig({ TTC_API_KEY: "ttc_test_key", TTC_BASE_URL: "https://example.com" });
+
+  await transformMessagesWithTtc({
+    output,
+    client,
+    config: {
+      ...baseConfig,
+      ...config,
+      minChars: 10,
+      maxRetries: 0
+    },
+    cache: new Map(),
+    fetchImpl: async (url) => {
+      calledUrl = String(url);
+      throw new Error("network down");
+    }
+  });
+
+  assert.equal(calledUrl, "https://api.thetokencompany.com/v1/compress");
+  assert.equal(output.messages[0].parts[0].text, "this message should fail-open when request fails");
 });
 
 test("resolves plugin config path from XDG_CONFIG_HOME", () => {

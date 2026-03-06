@@ -34,6 +34,7 @@ Environment variables:
 ```env
 TTC_ENABLED=true
 TTC_API_KEY=<token-company-key>
+# Optional; locked to TTC host only for security
 TTC_BASE_URL=https://api.thetokencompany.com
 TTC_MODEL=bear-1.2
 TTC_AGGRESSIVENESS=0.1
@@ -63,6 +64,12 @@ Compression setting resolution order:
 1. `TTC_AGGRESSIVENESS` environment variable (optional override)
 2. Plugin config file `~/.config/opencode/ttc-plugin.json`
 3. Built-in default (`balanced` = `0.1`)
+
+Network egress policy:
+
+- Compression requests are pinned to `https://api.thetokencompany.com`.
+- Any invalid/custom `TTC_BASE_URL` value is ignored and the plugin falls back to the pinned host.
+- A socket/network alert from your firewall is expected on first use because the plugin makes an outbound HTTPS API call.
 
 ## Behavior
 
