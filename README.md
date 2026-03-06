@@ -1,6 +1,8 @@
-# @drfok/opencode-ttc-plugin
+# Opencode The Token Company Plugin
 
-OpenCode message transform plugin for The Token Company (TTC) compression.
+OpenCode message transform plugin with [The Token Company](https://thetokencompany.com/) (TTC) API.
+
+The Token Company (YC W26) builds models that process tokens based on context and semantic intent. With this plugin, you can remove context bloat from your prompts to Opencode before they hit the LLM provider.
 
 [![npm version](https://img.shields.io/npm/v/@drfok/opencode-ttc-plugin.svg)](https://www.npmjs.com/package/@drfok/opencode-ttc-plugin)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](./LICENSE)
