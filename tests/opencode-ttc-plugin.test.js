@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import TtcMessageTransformPlugin, {
+import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
+import {
   buildTtcPluginConfig,
   getSkipReasonForText,
   transformMessagesWithTtc
-} from "../opencode-plugins/ttc-message-transform.js";
+} from "../opencode-plugins/ttc-message-transform-core.js";
 
 function createOutput(text) {
   return {

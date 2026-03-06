@@ -1,4 +1,4 @@
-import { buildTtcPluginConfig, transformMessagesWithTtc } from "../opencode-plugins/ttc-message-transform.js";
+import { buildTtcPluginConfig, transformMessagesWithTtc } from "../opencode-plugins/ttc-message-transform-core.js";
 
 function buildSmokeOutput() {
   const seed = [

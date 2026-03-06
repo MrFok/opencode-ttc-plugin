@@ -6,12 +6,10 @@ import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_FILENAME = "ttc-message-transform.js";
-const BRIDGE_FILENAME = "tcc-proxy-bridge.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(currentFile), "..");
 const sourcePluginPath = resolve(repoRoot, "opencode-plugins", PLUGIN_FILENAME);
-const sourceBridgePath = resolve(repoRoot, "opencode-plugins", BRIDGE_FILENAME);
 const pluginsDir = resolve(homedir(), ".config", "opencode", "plugins");
 const installedPluginPath = resolve(pluginsDir, PLUGIN_FILENAME);
 
@@ -38,9 +36,6 @@ function install() {
   chmodSync(installedPluginPath, 0o644);
 
   console.log(`Installed ${PLUGIN_FILENAME} to ${installedPluginPath}`);
-  if (existsSync(sourceBridgePath)) {
-    console.log(`Optional fallback bridge source is available at ${sourceBridgePath}`);
-  }
 }
 
 function doctor() {

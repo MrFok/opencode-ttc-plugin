@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "type": "module",
-  "description": "OpenCode TTC message transform plugin with fail-open compression",
+  "description": "OpenCode plugin that allows input compression via The Token Company API",
   "scripts": {
     "test": "node --test tests/*.test.js",
     "smoke:plugin": "node scripts/plugin-smoke.mjs",
@@ -12,10 +12,10 @@
     "plugin:uninstall": "node scripts/cli.mjs uninstall"
   },
   "bin": {
-    "opencode-ttc-plugin": "./scripts/cli.mjs",
-    "opencode-ttc-plugin-install": "./scripts/cli.mjs",
-    "opencode-ttc-plugin-doctor": "./scripts/cli.mjs",
-    "opencode-ttc-plugin-uninstall": "./scripts/cli.mjs"
+    "opencode-ttc-plugin": "scripts/cli.mjs",
+    "opencode-ttc-plugin-install": "scripts/cli.mjs",
+    "opencode-ttc-plugin-doctor": "scripts/cli.mjs",
+    "opencode-ttc-plugin-uninstall": "scripts/cli.mjs"
   },
   "exports": {
     ".": "./opencode-plugins/ttc-message-transform.js",
@@ -23,24 +23,23 @@
     "./plugin-core": "./opencode-plugins/ttc-message-transform-core.js"
   },
   "files": [
-    "opencode-plugins/*.js",
+    "opencode-plugins/ttc-message-transform.js",
+    "opencode-plugins/ttc-message-transform-core.js",
     "scripts/cli.mjs",
-    "README.md"
+    "README.md",
+    ".env.example",
+    "LICENSE",
+    "SECURITY.md"
   ],
   "engines": {
     "node": ">=20"
   },
   "main": "opencode-plugins/ttc-message-transform.js",
-  "directories": {
-    "doc": "docs",
-    "test": "tests"
-  },
   "devDependencies": {},
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MrFok/token-company-proxy.git"
+    "url": "git+https://github.com/MrFok/opencode-ttc-plugin.git"
   },
-  "keywords": [],
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -51,7 +50,7 @@
   "author": "DrFok",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/MrFok/token-company-proxy/issues"
+    "url": "https://github.com/MrFok/opencode-ttc-plugin/issues"
   },
-  "homepage": "https://github.com/MrFok/token-company-proxy#readme"
+  "homepage": "https://github.com/MrFok/opencode-ttc-plugin#readme"
 }

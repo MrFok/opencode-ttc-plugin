@@ -163,7 +163,7 @@ function recordProcessedPart(stats, { charsBefore, charsAfter, compressed, fallb
   updateStatsVersion(stats);
 }
 
-export function buildTtcPluginConfig(env = process.env) {
+function buildTtcPluginConfig(env = process.env) {
   return {
     enabled: parseBoolean(env.TTC_ENABLED, DEFAULT_CONFIG.enabled),
     apiKey: String(env.TTC_API_KEY ?? ""),
@@ -212,7 +212,7 @@ function isTextPart(part) {
   return Boolean(part && typeof part === "object" && part.type === "text" && typeof part.text === "string");
 }
 
-export function getSkipReasonForText(text, part, config) {
+function getSkipReasonForText(text, part, config) {
   if (!isTextPart(part)) return "non_text_part";
   if (part.synthetic) return "synthetic_part";
   if (!text) return "empty_text";
@@ -373,7 +373,7 @@ function setCached(cache, key, value, maxEntries) {
   }
 }
 
-export async function transformMessagesWithTtc({
+async function transformMessagesWithTtc({
   output,
   client,
   config,
@@ -498,7 +498,7 @@ export async function transformMessagesWithTtc({
   }
 }
 
-export const TtcMessageTransformPlugin = async ({ client }) => {
+const TtcMessageTransformPlugin = async ({ client }) => {
   const config = buildTtcPluginConfig();
   const cache = new Map();
   const sessionStats = new Map();
@@ -548,3 +548,9 @@ export const TtcMessageTransformPlugin = async ({ client }) => {
 };
 
 export default TtcMessageTransformPlugin;
+
+TtcMessageTransformPlugin._test = {
+  buildTtcPluginConfig,
+  getSkipReasonForText,
+  transformMessagesWithTtc
+};

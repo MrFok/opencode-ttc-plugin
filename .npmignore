@@ -1,0 +1,9 @@
+tests/
+docs/
+.git/
+.github/
+.opencode/
+.env
+.env.*
+AGENTS.md
+drfok-opencode-ttc-plugin-*.tgz

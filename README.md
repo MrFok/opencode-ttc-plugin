@@ -1,36 +1,29 @@
-# token-company-proxy
+# @drfok/opencode-ttc-plugin
 
-Plugin-first TTC compression for OpenCode.
-
-## What This Branch Contains
-
-- OpenCode transform plugin: `opencode-plugins/ttc-message-transform.js`
-- Existing bridge fallback plugin: `opencode-plugins/tcc-proxy-bridge.js`
-- Plugin tests:
-  - `tests/opencode-ttc-plugin.test.js`
-  - `tests/opencode-bridge-plugin.test.js`
-- Plugin-focused design docs under `docs/`.
-
-All proxy server runtime code and proxy-only test harness code has been removed on this branch.
+OpenCode message-transform plugin for The Token Company (TTC) prompt compression.
 
 ## Install
 
+From npm (recommended):
+
 ```bash
+npm install -g @drfok/opencode-ttc-plugin
+opencode-ttc-plugin install
+```
+
+From source checkout:
+
+```bash
+cd /path/to/opencode-ttc-plugin
 npm install
 npm run plugin:install
 ```
 
-Direct copy alternative:
+Manual copy:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
 cp opencode-plugins/ttc-message-transform.js ~/.config/opencode/plugins/ttc-message-transform.js
-```
-
-Optional fallback plugin:
-
-```bash
-cp opencode-plugins/tcc-proxy-bridge.js ~/.config/opencode/plugins/tcc-proxy-bridge.js
 ```
 
 ## TTC Plugin Env
@@ -63,6 +56,10 @@ TTC_TOAST_ON_IDLE_SUMMARY=true
 - Structured logs via `client.app.log` without raw prompt text or secrets.
 - TUI toasts show per-session activation and idle summaries with token-savings estimates.
 
+## Important Notes
+
+- This package is plugin-only; it does not run a local proxy server.
+
 ## Test
 
 ```bash
@@ -88,6 +85,12 @@ npm run smoke:plugin
 ## Plugin CLI
 
 ```bash
+opencode-ttc-plugin install
+npm run plugin:install
+
+opencode-ttc-plugin doctor
 npm run plugin:doctor
+
+opencode-ttc-plugin uninstall
 npm run plugin:uninstall
 ```
