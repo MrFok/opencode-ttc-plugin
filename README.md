@@ -16,6 +16,13 @@ All proxy server runtime code and proxy-only test harness code has been removed 
 ## Install
 
 ```bash
+npm install
+npm run plugin:install
+```
+
+Direct copy alternative:
+
+```bash
 mkdir -p ~/.config/opencode/plugins
 cp opencode-plugins/ttc-message-transform.js ~/.config/opencode/plugins/ttc-message-transform.js
 ```
@@ -77,3 +84,10 @@ npm run smoke:plugin
 ```
 
 - The smoke output reports only metadata (changed, char counts, reason), not raw prompt text.
+
+## Plugin CLI
+
+```bash
+npm run plugin:doctor
+npm run plugin:uninstall
+```

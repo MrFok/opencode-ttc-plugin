@@ -1,17 +1,36 @@
 {
-  "name": "token-company-proxy",
+  "name": "@drfok/opencode-ttc-plugin",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "type": "module",
-  "description": "OpenCode TTC plugin-first compression utilities",
+  "description": "OpenCode TTC message transform plugin with fail-open compression",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "smoke:plugin": "node scripts/plugin-smoke.mjs"
+    "smoke:plugin": "node scripts/plugin-smoke.mjs",
+    "plugin:install": "node scripts/cli.mjs install",
+    "plugin:doctor": "node scripts/cli.mjs doctor",
+    "plugin:uninstall": "node scripts/cli.mjs uninstall"
   },
+  "bin": {
+    "opencode-ttc-plugin": "./scripts/cli.mjs",
+    "opencode-ttc-plugin-install": "./scripts/cli.mjs",
+    "opencode-ttc-plugin-doctor": "./scripts/cli.mjs",
+    "opencode-ttc-plugin-uninstall": "./scripts/cli.mjs"
+  },
+  "exports": {
+    ".": "./opencode-plugins/ttc-message-transform.js",
+    "./plugin": "./opencode-plugins/ttc-message-transform.js",
+    "./plugin-core": "./opencode-plugins/ttc-message-transform-core.js"
+  },
+  "files": [
+    "opencode-plugins/*.js",
+    "scripts/cli.mjs",
+    "README.md"
+  ],
   "engines": {
     "node": ">=20"
   },
-  "main": "index.js",
+  "main": "opencode-plugins/ttc-message-transform.js",
   "directories": {
     "doc": "docs",
     "test": "tests"
@@ -22,7 +41,14 @@
     "url": "git+https://github.com/MrFok/token-company-proxy.git"
   },
   "keywords": [],
-  "author": "",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "token-company",
+    "prompt-compression",
+    "ttc"
+  ],
+  "author": "DrFok",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/MrFok/token-company-proxy/issues"
