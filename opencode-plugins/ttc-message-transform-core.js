@@ -6,6 +6,18 @@ export function buildTtcPluginConfig(...args) {
   return testApi.buildTtcPluginConfig(...args);
 }
 
+export function getPluginConfigPath(...args) {
+  return testApi.getPluginConfigPath(...args);
+}
+
+export async function resolvePluginSettings(...args) {
+  return testApi.resolvePluginSettings(...args);
+}
+
+export function resolveCompressionConfig(...args) {
+  return testApi.resolveCompressionConfig(...args);
+}
+
 export function getAuthStorePath(...args) {
   return testApi.getAuthStorePath(...args);
 }

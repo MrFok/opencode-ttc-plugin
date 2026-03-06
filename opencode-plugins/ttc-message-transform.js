@@ -6,6 +6,13 @@ import { gzipSync } from "node:zlib";
 
 const AUTH_PROVIDER_ID = "the-token-company-plugin";
 
+const COMPRESSION_LEVELS = {
+  low: 0.05,
+  balanced: 0.1,
+  high: 0.2,
+  max: 0.3
+};
+
 const DEFAULT_CONFIG = {
   enabled: true,
   apiKey: "",
@@ -56,6 +63,22 @@ function parseFloatValue(rawValue, fallbackValue) {
 function parseIntValue(rawValue, fallbackValue) {
   const parsed = Number.parseInt(String(rawValue ?? ""), 10);
   return Number.isInteger(parsed) ? parsed : fallbackValue;
+}
+
+function hasEnvValue(rawValue) {
+  if (rawValue === undefined || rawValue === null) return false;
+  return String(rawValue).trim() !== "";
+}
+
+function clampAggressiveness(value) {
+  const parsed = Number.parseFloat(String(value ?? ""));
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function normalizeCompressionLevel(level) {
+  const normalized = String(level ?? "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(COMPRESSION_LEVELS, normalized) ? normalized : "";
 }
 
 function toNumber(value) {
@@ -193,6 +216,65 @@ function getAuthStorePath(env = process.env) {
   const xdgDataHome = String(env.XDG_DATA_HOME ?? "").trim();
   const dataHome = xdgDataHome || join(homedir(), ".local", "share");
   return join(dataHome, "opencode", "auth.json");
+}
+
+function getPluginConfigPath(env = process.env) {
+  const xdgConfigHome = String(env.XDG_CONFIG_HOME ?? "").trim();
+  const configHome = xdgConfigHome || join(homedir(), ".config");
+  return join(configHome, "opencode", "ttc-plugin.json");
+}
+
+async function resolvePluginSettings({
+  settingsFilePath = getPluginConfigPath(),
+  readFileImpl = readFile
+} = {}) {
+  try {
+    const content = await readFileImpl(settingsFilePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function resolveCompressionConfig({
+  env = process.env,
+  settings = {},
+  defaultAggressiveness = DEFAULT_CONFIG.aggressiveness
+} = {}) {
+  const envHasAggressiveness = hasEnvValue(env.TTC_AGGRESSIVENESS);
+  if (envHasAggressiveness) {
+    return {
+      aggressiveness: clampAggressiveness(env.TTC_AGGRESSIVENESS) ?? defaultAggressiveness,
+      level: "",
+      source: "env"
+    };
+  }
+
+  const settingsAggressiveness = clampAggressiveness(settings.aggressiveness);
+  if (settingsAggressiveness !== null) {
+    return {
+      aggressiveness: settingsAggressiveness,
+      level: "",
+      source: "plugin_config"
+    };
+  }
+
+  const level = normalizeCompressionLevel(settings.compressionLevel);
+  if (level) {
+    return {
+      aggressiveness: COMPRESSION_LEVELS[level],
+      level,
+      source: "plugin_config"
+    };
+  }
+
+  return {
+    aggressiveness: defaultAggressiveness,
+    level: "balanced",
+    source: "default"
+  };
 }
 
 async function resolveApiKeyFromAuthStore({
@@ -542,6 +624,13 @@ async function transformMessagesWithTtc({
 
 const TtcMessageTransformPlugin = async ({ client }) => {
   const config = buildTtcPluginConfig();
+  const pluginSettings = await resolvePluginSettings();
+  const compressionResolution = resolveCompressionConfig({
+    env: process.env,
+    settings: pluginSettings,
+    defaultAggressiveness: config.aggressiveness
+  });
+  config.aggressiveness = compressionResolution.aggressiveness;
   const authStoreApiKey = await resolveApiKeyFromAuthStore({ providerID: AUTH_PROVIDER_ID });
   const apiKeyResolution = resolveEffectiveApiKey(config.apiKey, authStoreApiKey);
   config.apiKey = apiKeyResolution.apiKey;
@@ -553,6 +642,8 @@ const TtcMessageTransformPlugin = async ({ client }) => {
     has_api_key: Boolean(config.apiKey),
     auth_provider_id: AUTH_PROVIDER_ID,
     auth_source: apiKeyResolution.source,
+    compression_source: compressionResolution.source,
+    compression_level: compressionResolution.level || "custom",
     base_url: config.baseUrl,
     model: config.model,
     aggressiveness: config.aggressiveness,
@@ -620,7 +711,11 @@ export default TtcMessageTransformPlugin;
 
 TtcMessageTransformPlugin._test = {
   AUTH_PROVIDER_ID,
+  COMPRESSION_LEVELS,
   buildTtcPluginConfig,
+  getPluginConfigPath,
+  resolvePluginSettings,
+  resolveCompressionConfig,
   getAuthStorePath,
   resolveApiKeyFromAuthStore,
   resolveEffectiveApiKey,

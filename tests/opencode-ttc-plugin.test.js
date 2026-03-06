@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
 import {
   buildTtcPluginConfig,
+  getPluginConfigPath,
   getAuthStorePath,
   getSkipReasonForText,
+  resolveCompressionConfig,
+  resolvePluginSettings,
   resolveApiKeyFromAuthStore,
   resolveEffectiveApiKey,
   transformMessagesWithTtc
@@ -228,6 +231,53 @@ test("buildTtcPluginConfig parses env values", () => {
   assert.equal(parsed.cacheMaxEntries, 50);
   assert.equal(parsed.toastOnActive, false);
   assert.equal(parsed.toastOnIdleSummary, false);
+});
+
+test("resolves plugin config path from XDG_CONFIG_HOME", () => {
+  const path = getPluginConfigPath({ XDG_CONFIG_HOME: "/tmp/xdg-config" });
+  assert.equal(path, "/tmp/xdg-config/opencode/ttc-plugin.json");
+});
+
+test("resolvePluginSettings returns empty object on malformed json", async () => {
+  const settings = await resolvePluginSettings({
+    readFileImpl: async () => "invalid-json"
+  });
+  assert.deepEqual(settings, {});
+});
+
+test("resolveCompressionConfig uses env override over plugin config", () => {
+  const resolved = resolveCompressionConfig({
+    env: { TTC_AGGRESSIVENESS: "0.42" },
+    settings: { compressionLevel: "high", aggressiveness: 0.2 },
+    defaultAggressiveness: 0.1
+  });
+
+  assert.equal(resolved.aggressiveness, 0.42);
+  assert.equal(resolved.source, "env");
+});
+
+test("resolveCompressionConfig uses plugin compression level", () => {
+  const resolved = resolveCompressionConfig({
+    env: {},
+    settings: { compressionLevel: "high" },
+    defaultAggressiveness: 0.1
+  });
+
+  assert.equal(resolved.aggressiveness, 0.2);
+  assert.equal(resolved.level, "high");
+  assert.equal(resolved.source, "plugin_config");
+});
+
+test("resolveCompressionConfig falls back to default", () => {
+  const resolved = resolveCompressionConfig({
+    env: {},
+    settings: {},
+    defaultAggressiveness: 0.1
+  });
+
+  assert.equal(resolved.aggressiveness, 0.1);
+  assert.equal(resolved.level, "balanced");
+  assert.equal(resolved.source, "default");
 });
 
 test("resolves auth store path from XDG_DATA_HOME", () => {

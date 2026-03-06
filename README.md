@@ -58,6 +58,12 @@ API key resolution order:
 2. OpenCode auth store entry for `the-token-company-plugin` (recommended default)
 3. fail-open no-op (plugin stays inactive)
 
+Compression setting resolution order:
+
+1. `TTC_AGGRESSIVENESS` environment variable (optional override)
+2. Plugin config file `~/.config/opencode/ttc-plugin.json`
+3. Built-in default (`balanced` = `0.1`)
+
 ## Behavior
 
 - Compresses eligible outbound text through `experimental.chat.messages.transform`.
@@ -72,8 +78,20 @@ API key resolution order:
 ```bash
 opencode-ttc-plugin install
 opencode-ttc-plugin doctor
+opencode-ttc-plugin doctor --verbose
 opencode-ttc-plugin uninstall
+opencode-ttc-plugin config get
+opencode-ttc-plugin config set level balanced
+opencode-ttc-plugin config set aggressiveness 0.25
+opencode-ttc-plugin config reset
 ```
+
+Compression presets:
+
+- `low` = `0.05`
+- `balanced` = `0.1`
+- `high` = `0.2`
+- `max` = `0.3`
 
 Equivalent source-repo scripts:
 
