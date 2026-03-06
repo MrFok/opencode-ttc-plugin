@@ -2,6 +2,11 @@
 
 OpenCode message transform plugin for The Token Company (TTC) compression.
 
+[![npm version](https://img.shields.io/npm/v/@drfok/opencode-ttc-plugin.svg)](https://www.npmjs.com/package/@drfok/opencode-ttc-plugin)
+[![npm downloads](https://img.shields.io/npm/dw/@drfok/opencode-ttc-plugin.svg)](https://www.npmjs.com/package/@drfok/opencode-ttc-plugin)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](./LICENSE)
+[![X (Twitter)](https://img.shields.io/badge/X-%40drfok-111111.svg)](https://x.com/drfok)
+
 ## Quick Start
 
 Install from npm and register the plugin with OpenCode:
