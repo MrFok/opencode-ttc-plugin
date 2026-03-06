@@ -1,249 +1,79 @@
 # token-company-proxy
 
-OpenAI-compatible proxy for IDE workflows (Cursor-compatible) that can apply safe prompt compression before forwarding requests to an upstream model provider.
+Plugin-first TTC compression for OpenCode.
 
-## Current Status
-- Milestone 1 implemented: baseline pass-through proxy
-- Milestone 2 implemented: safe-mode selective compression with fail-open fallback
+## What This Branch Contains
 
-## Milestone 1 Features
-- `POST /v1/chat/completions` OpenAI-compatible pass-through
-- Streaming pass-through (no full response buffering)
-- Configurable upstream (`UPSTREAM_BASE_URL`, `UPSTREAM_API_KEY`)
-- Optional proxy auth (`PROXY_API_KEY`)
-- Health endpoint at `GET /healthz`
+- OpenCode transform plugin: `opencode-plugins/ttc-message-transform.js`
+- Existing bridge fallback plugin: `opencode-plugins/tcc-proxy-bridge.js`
+- Plugin tests:
+  - `tests/opencode-ttc-plugin.test.js`
+  - `tests/opencode-bridge-plugin.test.js`
+- Plugin-focused design docs under `docs/`.
 
-## Supported Endpoints (current)
-- `POST /v1/chat/completions`
-- `POST /v1/responses`
-- `POST /v1/embeddings`
-- `GET /v1/models`
-- `GET /healthz`
-- `GET /stats`
-- `GET /debug/logs` (local mode)
+All proxy server runtime code and proxy-only test harness code has been removed on this branch.
 
-When `RELAY_MODE=single_base_url`, all unmatched `/v1/*` routes are relayed upstream unchanged.
-
-## Milestone 2 Features
-- Safe-mode selective compression for `/v1/chat/completions` request messages
-- Conservative default: compress only `user` role content (`COMPRESS_ROLES` configurable)
-- High-risk content skip heuristics (code fences, diffs, stack traces, likely structured blobs)
-- Fail-open behavior for all compression errors/timeouts
-- Token Company integration with optional gzip requests
-- Stats endpoint at `GET /stats` (no prompt content)
-- Local structured logs endpoint at `GET /debug/logs` (local mode only)
-
-## Milestone 3 Hardening
-- Compression retry policy for transient Token Company failures (`5xx`, `429`, timeouts)
-- Bounded retry/backoff with fail-open fallback after retry exhaustion
-- Integration tests for fail-open and retry success paths (`npm test`)
-
-## Milestone 4 Hardening
-- Upstream retry matrix for transient failures (`429`, `5xx`, timeout/network)
-- Upstream timeout split: first stream chunk timeout + total upstream timeout
-- Model fallback chain support via `UPSTREAM_FALLBACKS`
-- Stream-safe behavior: no replay retry after stream output begins
-
-## Milestone 5 Routing
-- Multi-provider registry via `UPSTREAM_PROVIDERS_JSON`
-- Model routing rules (exact/prefix/glob) via `MODEL_ROUTE_RULES_JSON`
-- Default provider selection via `MODEL_DEFAULT_PROVIDER`
-- Cross-provider fallback rules via `MODEL_FALLBACK_RULES_JSON`
-
-## Milestone 6 Provider Auth Policy
-- Per-provider auth mode support (`provider_key`, `client_bearer`, `provider_or_client`)
-- Per-provider API key via inline `apiKey` or `apiKeyEnv`
-- Safe custom provider headers (`x-*` and `openrouter-*` allowlist)
-- Optional strict startup validation via `PROVIDER_CONFIG_STRICT`
-
-## Milestone 7 Models Catalog
-- `GET /v1/models` support for OpenAI-compatible model discovery
-- Modes: `passthrough`, `aggregate`, and `static`
-- TTL cache for model catalog responses
-- Optional allowlist/denylist filters and alias names
-
-## Milestone 8 Responses API
-- `POST /v1/responses` support with same routing/retry/fallback behavior as chat completions
-- Safe fail-open compression for eligible `input` content in responses payloads
-- Streaming passthrough with first-chunk timeout protections
-
-## Milestone 9 Embeddings API
-- `POST /v1/embeddings` support with multi-provider routing/retry/fallback parity
-- Embeddings compression is disabled by default (`ENABLE_EMBEDDINGS_COMPRESSION=false`)
-
-## Quick Start
-1. Copy env file and set keys:
-   - `cp .env.example .env.local`
-   - Set `UPSTREAM_API_KEY`
-2. Start server:
-   - `npm start`
-3. Configure Cursor:
-   - Base URL: `http://localhost:8080/v1`
-   - API Key: `anything` (or your `PROXY_API_KEY` if enabled)
-
-## Environment Variables
-- `PORT` (default `8080`)
-- `RELAY_MODE` (`single_base_url` enables generic `/v1/*` relay passthrough)
-- `UPSTREAM_BASE_URL` (default `https://api.openai.com`)
-- `UPSTREAM_API_KEY` (recommended; if empty, proxy forwards client Bearer token)
-- `UPSTREAM_MAX_RETRIES` (default `2`)
-- `UPSTREAM_RETRY_BACKOFF_MS` (default `150`)
-- `UPSTREAM_RETRY_STATUS_CODES` (default `429,500,502,503,504`)
-- `UPSTREAM_STREAM_FIRST_CHUNK_TIMEOUT_MS` (default `12000`)
-- `UPSTREAM_TOTAL_TIMEOUT_MS` (default `120000`)
-- `UPSTREAM_FALLBACKS` (format: `model=fallback1,fallback2;*=defaultFallback`)
-- `UPSTREAM_PROVIDERS_JSON` (JSON provider registry)
-- `MODEL_ROUTE_RULES_JSON` (JSON route rules)
-- `MODEL_DEFAULT_PROVIDER` (default `default`)
-- `MODEL_FALLBACK_RULES_JSON` (JSON fallback chains)
-- `PROVIDER_CONFIG_STRICT` (`true` fails startup on invalid provider auth config)
-- `MODELS_SOURCE_MODE` (`passthrough|aggregate|static`)
-- `MODELS_CACHE_TTL_MS` (default `30000`)
-- `MODELS_ALLOWLIST` (comma-separated model IDs)
-- `MODELS_DENYLIST` (comma-separated model IDs)
-- `MODELS_ALIASES_JSON` (JSON map of model id to display name)
-- `MODELS_STATIC_JSON` (JSON array of model objects for static mode)
-- `PROXY_API_KEY` (optional, enables proxy-level auth)
-- `PROXY_API_KEY_HEADER` (default `authorization`; set `x-proxy-key` to keep `Authorization` for upstream passthrough)
-- `TOKEN_COMPANY_API_KEY` (used in Milestone 2)
-- `LOCAL_TEST_MODE` (`true` enables `.env.local` preference)
-- `ENABLE_COMPRESSION` (`true`/`false`)
-- `ENABLE_EMBEDDINGS_COMPRESSION` (`true` enables optional embeddings input compression)
-- `TOKEN_COMPANY_BASE_URL` (default `https://api.thetokencompany.com`)
-- `TOKEN_COMPANY_MODEL` (default `bear-1.2`)
-- `TOKEN_COMPANY_AGGRESSIVENESS` (default `0.1`)
-- `TOKEN_COMPANY_TIMEOUT_MS` (default `2500`)
-- `TOKEN_COMPANY_USE_GZIP` (default `true`)
-- `TOKEN_COMPANY_MAX_RETRIES` (default `1`)
-- `TOKEN_COMPANY_RETRY_BACKOFF_MS` (default `100`)
-- `COMPRESSION_MIN_CHARS` (default `500`)
-- `COMPRESS_ROLES` (comma-separated, default `user`)
-- `LOG_LEVEL` (`debug|info|warn|error`)
-- `LOG_BUFFER_SIZE` (in-memory log ring size, default `500`)
-- `LOG_LOCAL_ENDPOINT` (enable `GET /debug/logs` in non-production)
-
-## Single Base URL Relay Mode
-- Use this mode for Cursor and OpenAI-compatible API key clients when you want guaranteed interception before upstream.
-- Example env:
-
-```env
-RELAY_MODE=single_base_url
-UPSTREAM_BASE_URL=https://api.openai.com
-UPSTREAM_API_KEY=
-PROXY_API_KEY=
-ENABLE_COMPRESSION=true
-```
-
-- Cursor setup:
-  - Enable OpenAI API key mode
-  - Override OpenAI Base URL: `http://localhost:8080/v1`
-  - Use your regular model IDs (for example `gpt-5.3-codex`)
-
-- If you need proxy auth and upstream bearer passthrough at the same time:
-  - Set `PROXY_API_KEY=<secret>`
-  - Set `PROXY_API_KEY_HEADER=x-proxy-key`
-  - Send `X-Proxy-Key: <secret>` to proxy and keep `Authorization: Bearer <upstream-token>` for upstream.
-
-## OpenCode Harness Bridge (OAuth + Z.AI)
-- Use `opencode-plugins/tcc-proxy-bridge.js` to intercept OpenCode provider requests in-process and rewrite them to your local proxy.
-- Install plugin:
-  - `mkdir -p ~/.config/opencode/plugins`
-  - `cp opencode-plugins/tcc-proxy-bridge.js ~/.config/opencode/plugins/tcc-proxy-bridge.js`
-- Optional plugin env vars:
-  - `OC_PROXY_BRIDGE_BASE_URL` (default `http://127.0.0.1:8080`)
-  - `OC_PROXY_BRIDGE_TARGETS` (comma-separated upstream bases)
-  - `OC_PROXY_BRIDGE_DEBUG=true` (logs rewrites)
-- Run proxy with OpenAI + Z.AI provider routing:
-
-```env
-RELAY_MODE=single_base_url
-UPSTREAM_API_KEY=
-PROXY_API_KEY=
-UPSTREAM_PROVIDERS_JSON={"openai":{"baseURL":"https://api.openai.com","authMode":"client_bearer","passThroughClientAuth":true},"zai":{"baseURL":"https://api.z.ai/api/coding/paas/v4","authMode":"client_bearer","passThroughClientAuth":true}}
-MODEL_ROUTE_RULES_JSON=[{"match":"prefix","value":"gpt-","provider":"openai"},{"match":"prefix","value":"o","provider":"openai"},{"match":"prefix","value":"glm-","provider":"zai"}]
-MODEL_DEFAULT_PROVIDER=openai
-```
-
-- Result: OpenCode OAuth/OpenAI and Z.AI requests are intercepted by plugin, then routed through proxy, then forwarded upstream with original bearer credentials.
-- Note: if upstream returns `401` for OpenAI OAuth, the token audience/scope may not allow direct `api.openai.com` API usage even though routing works.
-
-## Local Test Mode
-- When `LOCAL_TEST_MODE=true` (or when `.env.local` exists and `NODE_ENV` is not `production`), the proxy loads `.env.local` first.
-- `.env` is also loaded as fallback for missing values.
-- Existing shell environment variables still take priority over file values.
-
-## OpenRouter Example
-Use OpenRouter as upstream by setting:
-
-```env
-UPSTREAM_BASE_URL=https://openrouter.ai/api
-UPSTREAM_API_KEY=<openrouter_key>
-```
-
-Then send a request through the proxy using your model name, for example:
+## Install
 
 ```bash
-curl -s http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_PROXY_API_KEY" \
-  -d '{
-    "model": "arcee-ai/trinity-large-preview:free",
-    "messages": [
-      {"role": "user", "content": "Say hello in one sentence."}
-    ]
-  }'
+mkdir -p ~/.config/opencode/plugins
+cp opencode-plugins/ttc-message-transform.js ~/.config/opencode/plugins/ttc-message-transform.js
 ```
 
-## Notes
-- Upstream compatibility target is currently `/v1/chat/completions`.
-- Compression path is intentionally conservative for coding safety.
-- `.env.local` remains ignored and should never be committed.
-- `/stats` now includes upstream retry/fallback counters and fallback rule visibility.
+Optional fallback plugin:
 
-## Multi-Provider Routing Example
+```bash
+cp opencode-plugins/tcc-proxy-bridge.js ~/.config/opencode/plugins/tcc-proxy-bridge.js
+```
+
+## TTC Plugin Env
+
 ```env
-UPSTREAM_PROVIDERS_JSON={"openrouter":{"baseURL":"https://openrouter.ai/api","authMode":"provider_or_client","apiKeyEnv":"OPENROUTER_API_KEY","passThroughClientAuth":true},"openai":{"baseURL":"https://api.openai.com","authMode":"provider_key","apiKeyEnv":"OPENAI_API_KEY","headers":{"x-app":"token-proxy"}}}
-MODEL_ROUTE_RULES_JSON=[{"match":"prefix","value":"openrouter/","provider":"openrouter"},{"match":"prefix","value":"gpt-","provider":"openai"}]
-MODEL_DEFAULT_PROVIDER=openrouter
-MODEL_FALLBACK_RULES_JSON={"gpt-5.2":["openai:gpt-5.1","openrouter:gpt-4.1"]}
-PROVIDER_CONFIG_STRICT=true
+TTC_ENABLED=true
+TTC_API_KEY=<token-company-key>
+TTC_BASE_URL=https://api.thetokencompany.com
+TTC_MODEL=bear-1.2
+TTC_AGGRESSIVENESS=0.1
+TTC_MIN_CHARS=400
+TTC_TIMEOUT_MS=2000
+TTC_MAX_RETRIES=1
+TTC_RETRY_BACKOFF_MS=100
+TTC_USE_GZIP=true
+TTC_COMPRESS_SYSTEM=false
+TTC_COMPRESS_HISTORY=false
+TTC_DEBUG=false
+TTC_CACHE_MAX_ENTRIES=1000
+TTC_TOAST_ON_ACTIVE=true
+TTC_TOAST_ON_IDLE_SUMMARY=true
 ```
 
-## Testing
-- Run integration tests:
-  - `npm test`
-- Run local end-to-end smoke checks:
-  - `npm run smoke:e2e`
-- Run basic load conformance checks:
-  - `npm run load:conformance`
+## Behavior
 
-## OpenCode Model Sync
-- Sync your local OpenCode provider model list from proxy `GET /v1/models`:
-  - `npm run sync:opencode-models`
-- Default behavior syncs only OpenAI-compatible model IDs (`openai/*` gets rewritten to plain IDs like `gpt-5.3-codex`).
-- Useful overrides:
-  - `PROXY_BASE_URL` (default `http://localhost:8080/v1`)
-  - `PROXY_TEST_API_KEY` (default `local-test`; leave empty if proxy auth is disabled)
-  - `OPENCODE_PROVIDER_ID` (default `localproxy`)
-  - `OPENCODE_PROVIDER_NAME` (default `Local LLM Proxy`)
-  - `OPENCODE_CONFIG_PATH` (default `~/.config/opencode/opencode.json`)
-  - `SYNC_MODELS_TIMEOUT_MS` (default `15000`)
-  - `SYNC_MODEL_PROFILE` (`openai` default, or `all` to keep raw upstream IDs)
+- Compresses eligible outbound text using `experimental.chat.messages.transform`.
+- Fail-open: TTC errors/timeouts/rate limits never block normal model requests.
+- Conservative skip policy for code, diffs, likely JSON/schema-sensitive and synthetic content.
+- In-memory dedupe cache keyed by session/message/part/hash + compression settings.
+- Structured logs via `client.app.log` without raw prompt text or secrets.
+- TUI toasts show per-session activation and idle summaries with token-savings estimates.
 
-## Local Logs Endpoint
-- Endpoint: `GET /debug/logs`
-- Available only when `LOG_LOCAL_ENDPOINT=true` and not in production.
-- Requires proxy auth if `PROXY_API_KEY` is configured.
-- Query params:
-  - `level` (`debug|info|warn|error`)
-  - `request_id`
-  - `since` (ISO timestamp)
-  - `limit` (max `200`)
+## Test
 
-## Planning Docs
-- `docs/spec.md`
-- `docs/implementation-plan.md`
-- `docs/evaluation-plan.md`
-- `docs/decisions.md`
-- `docs/token-company-api-notes.md`
-- `docs/logging-instructions.txt`
+```bash
+npm test
+```
+
+## Local Smoke Test
+
+- Put your TTC key in `.env.local` at repo root:
+
+```env
+TTC_API_KEY=<your-token-company-key>
+```
+
+- Run:
+
+```bash
+npm run smoke:plugin
+```
+
+- The smoke output reports only metadata (changed, char counts, reason), not raw prompt text.

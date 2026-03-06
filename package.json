@@ -3,15 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "OpenAI-compatible proxy for Cursor with compression-ready middleware",
+  "description": "OpenCode TTC plugin-first compression utilities",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js",
     "test": "node --test tests/*.test.js",
-    "smoke:e2e": "node scripts/smoke-e2e.mjs",
-    "load:conformance": "node scripts/load-conformance.mjs"
+    "smoke:plugin": "node scripts/plugin-smoke.mjs"
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MrFok/token-company-proxy.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/MrFok/token-company-proxy/issues"
+  },
+  "homepage": "https://github.com/MrFok/token-company-proxy#readme"
 }
