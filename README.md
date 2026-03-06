@@ -1,32 +1,25 @@
 # @drfok/opencode-ttc-plugin
 
-OpenCode message-transform plugin for The Token Company (TTC) prompt compression.
+OpenCode message transform plugin for The Token Company (TTC) compression.
 
-## Install
+## Quick Start
 
-From npm (recommended):
+Install from npm and register the plugin with OpenCode:
 
 ```bash
 npm install -g @drfok/opencode-ttc-plugin
 opencode-ttc-plugin install
 ```
 
-From source checkout:
+Set your TTC API key before launching OpenCode:
 
 ```bash
-cd /path/to/opencode-ttc-plugin
-npm install
-npm run plugin:install
+export TTC_API_KEY=<your-token-company-key>
 ```
 
-Manual copy:
+## Configuration
 
-```bash
-mkdir -p ~/.config/opencode/plugins
-cp opencode-plugins/ttc-message-transform.js ~/.config/opencode/plugins/ttc-message-transform.js
-```
-
-## TTC Plugin Env
+Environment variables:
 
 ```env
 TTC_ENABLED=true
@@ -47,50 +40,45 @@ TTC_TOAST_ON_ACTIVE=true
 TTC_TOAST_ON_IDLE_SUMMARY=true
 ```
 
+See `.env.example` for the same defaults.
+
 ## Behavior
 
-- Compresses eligible outbound text using `experimental.chat.messages.transform`.
-- Fail-open: TTC errors/timeouts/rate limits never block normal model requests.
-- Conservative skip policy for code, diffs, likely JSON/schema-sensitive and synthetic content.
-- In-memory dedupe cache keyed by session/message/part/hash + compression settings.
-- Structured logs via `client.app.log` without raw prompt text or secrets.
-- TUI toasts show per-session activation and idle summaries with token-savings estimates.
+- Compresses eligible outbound text through `experimental.chat.messages.transform`.
+- Fail-open by design: TTC errors and timeouts never block model requests.
+- Skips high-risk content (code fences, diffs, likely JSON/schema-sensitive, synthetic parts).
+- Uses in-memory dedupe cache by session/message/part/hash and compression settings.
+- Emits structured logs without raw prompt text or secret values.
+- Shows activation and idle-summary toasts with savings estimates.
 
-## Important Notes
+## CLI Commands
 
-- This package is plugin-only; it does not run a local proxy server.
+```bash
+opencode-ttc-plugin install
+opencode-ttc-plugin doctor
+opencode-ttc-plugin uninstall
+```
 
-## Test
+Equivalent source-repo scripts:
+
+```bash
+npm run plugin:install
+npm run plugin:doctor
+npm run plugin:uninstall
+```
+
+## Development
+
+Run tests:
 
 ```bash
 npm test
 ```
 
-## Local Smoke Test
-
-- Export your TTC key in your shell:
-
-```bash
-export TTC_API_KEY=<your-token-company-key>
-```
-
-- Run:
+Run smoke check:
 
 ```bash
 npm run smoke:plugin
 ```
 
-- The smoke output reports only metadata (changed, char counts, reason), not raw prompt text.
-
-## Plugin CLI
-
-```bash
-opencode-ttc-plugin install
-npm run plugin:install
-
-opencode-ttc-plugin doctor
-npm run plugin:doctor
-
-opencode-ttc-plugin uninstall
-npm run plugin:uninstall
-```
+The smoke output reports only metadata (`changed`, char counts, reason), not raw prompt text.
