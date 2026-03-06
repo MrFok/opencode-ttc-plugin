@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
 import {
   buildTtcPluginConfig,
+  getAuthStorePath,
   getSkipReasonForText,
+  resolveApiKeyFromAuthStore,
+  resolveEffectiveApiKey,
   transformMessagesWithTtc
 } from "../opencode-plugins/ttc-message-transform-core.js";
 
@@ -225,6 +228,63 @@ test("buildTtcPluginConfig parses env values", () => {
   assert.equal(parsed.cacheMaxEntries, 50);
   assert.equal(parsed.toastOnActive, false);
   assert.equal(parsed.toastOnIdleSummary, false);
+});
+
+test("resolves auth store path from XDG_DATA_HOME", () => {
+  const path = getAuthStorePath({ XDG_DATA_HOME: "/tmp/xdg-data" });
+  assert.equal(path, "/tmp/xdg-data/opencode/auth.json");
+});
+
+test("resolves api key from OpenCode auth store for provider id", async () => {
+  const key = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": {
+        type: "api",
+        key: "auth_store_key"
+      }
+    })
+  });
+
+  assert.equal(key, "auth_store_key");
+});
+
+test("ignores malformed auth store data and non-api auth entries", async () => {
+  const malformed = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => "not-json"
+  });
+  assert.equal(malformed, "");
+
+  const oauth = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": {
+        type: "oauth",
+        access: "x"
+      }
+    })
+  });
+  assert.equal(oauth, "");
+});
+
+test("uses env key over auth store key", () => {
+  const resolved = resolveEffectiveApiKey("env_key", "auth_store_key");
+  assert.equal(resolved.apiKey, "env_key");
+  assert.equal(resolved.source, "env");
+});
+
+test("falls back to auth store key when env key missing", () => {
+  const resolved = resolveEffectiveApiKey("", "auth_store_key");
+  assert.equal(resolved.apiKey, "auth_store_key");
+  assert.equal(resolved.source, "auth_store");
+});
+
+test("registers plugin auth provider for /connect flow", async () => {
+  const client = createClient();
+  const plugin = await TtcMessageTransformPlugin({ client });
+
+  assert.equal(plugin.auth.provider, "the-token-company-plugin");
+  assert.equal(Array.isArray(plugin.auth.methods), true);
+  assert.equal(plugin.auth.methods.length > 0, true);
+  assert.equal(plugin.auth.methods[0].type, "api");
 });
 
 test("shows activation and idle summary toasts in TUI", async () => {

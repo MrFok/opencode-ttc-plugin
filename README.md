@@ -15,7 +15,13 @@ npm install -g @drfok/opencode-ttc-plugin
 opencode-ttc-plugin install
 ```
 
-Set your TTC API key before launching OpenCode:
+Set your TTC API key once in OpenCode auth store:
+
+1. Run `/connect` in OpenCode.
+2. Choose `the-token-company-plugin`.
+3. Select `Set TTC API Key` and paste your key.
+
+Optional override (advanced):
 
 ```bash
 export TTC_API_KEY=<your-token-company-key>
@@ -45,6 +51,12 @@ TTC_TOAST_ON_IDLE_SUMMARY=true
 ```
 
 See `.env.example` for the same defaults.
+
+API key resolution order:
+
+1. `TTC_API_KEY` environment variable (optional override)
+2. OpenCode auth store entry for `the-token-company-plugin` (recommended default)
+3. fail-open no-op (plugin stays inactive)
 
 ## Behavior
 

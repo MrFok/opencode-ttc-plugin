@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+
+const AUTH_PROVIDER_ID = "the-token-company-plugin";
 
 const DEFAULT_CONFIG = {
   enabled: true,
@@ -182,6 +187,43 @@ function buildTtcPluginConfig(env = process.env) {
     toastOnActive: parseBoolean(env.TTC_TOAST_ON_ACTIVE, DEFAULT_CONFIG.toastOnActive),
     toastOnIdleSummary: parseBoolean(env.TTC_TOAST_ON_IDLE_SUMMARY, DEFAULT_CONFIG.toastOnIdleSummary)
   };
+}
+
+function getAuthStorePath(env = process.env) {
+  const xdgDataHome = String(env.XDG_DATA_HOME ?? "").trim();
+  const dataHome = xdgDataHome || join(homedir(), ".local", "share");
+  return join(dataHome, "opencode", "auth.json");
+}
+
+async function resolveApiKeyFromAuthStore({
+  providerID = AUTH_PROVIDER_ID,
+  authFilePath = getAuthStorePath(),
+  readFileImpl = readFile
+} = {}) {
+  try {
+    const content = await readFileImpl(authFilePath, "utf8");
+    const parsed = JSON.parse(content);
+    if (!parsed || typeof parsed !== "object") return "";
+
+    const auth = parsed[providerID];
+    if (!auth || typeof auth !== "object") return "";
+    if (auth.type !== "api") return "";
+
+    const key = String(auth.key ?? "").trim();
+    return key;
+  } catch {
+    return "";
+  }
+}
+
+function resolveEffectiveApiKey(envApiKey, authStoreApiKey) {
+  const envKey = String(envApiKey ?? "").trim();
+  if (envKey) return { apiKey: envKey, source: "env" };
+
+  const authKey = String(authStoreApiKey ?? "").trim();
+  if (authKey) return { apiKey: authKey, source: "auth_store" };
+
+  return { apiKey: "", source: "missing" };
 }
 
 function isRetryableStatus(statusCode) {
@@ -500,12 +542,17 @@ async function transformMessagesWithTtc({
 
 const TtcMessageTransformPlugin = async ({ client }) => {
   const config = buildTtcPluginConfig();
+  const authStoreApiKey = await resolveApiKeyFromAuthStore({ providerID: AUTH_PROVIDER_ID });
+  const apiKeyResolution = resolveEffectiveApiKey(config.apiKey, authStoreApiKey);
+  config.apiKey = apiKeyResolution.apiKey;
   const cache = new Map();
   const sessionStats = new Map();
 
   await logEvent(client, "info", "ttc.plugin.init", {
     enabled: config.enabled,
     has_api_key: Boolean(config.apiKey),
+    auth_provider_id: AUTH_PROVIDER_ID,
+    auth_source: apiKeyResolution.source,
     base_url: config.baseUrl,
     model: config.model,
     aggressiveness: config.aggressiveness,
@@ -521,6 +568,28 @@ const TtcMessageTransformPlugin = async ({ client }) => {
   });
 
   return {
+    auth: {
+      provider: AUTH_PROVIDER_ID,
+      methods: [
+        {
+          type: "api",
+          label: "Set TTC API Key",
+          prompts: [
+            {
+              type: "text",
+              key: "apiKey",
+              message: "Enter TTC API key",
+              placeholder: "ttc_..."
+            }
+          ],
+          async authorize(inputs = {}) {
+            const key = String(inputs.apiKey ?? "").trim();
+            if (!key) return { type: "failed" };
+            return { type: "success", key };
+          }
+        }
+      ]
+    },
     "experimental.chat.messages.transform": async (_input, output) => {
       try {
         await transformMessagesWithTtc({ output, client, config, cache, sessionStats });
@@ -550,7 +619,11 @@ const TtcMessageTransformPlugin = async ({ client }) => {
 export default TtcMessageTransformPlugin;
 
 TtcMessageTransformPlugin._test = {
+  AUTH_PROVIDER_ID,
   buildTtcPluginConfig,
+  getAuthStorePath,
+  resolveApiKeyFromAuthStore,
+  resolveEffectiveApiKey,
   getSkipReasonForText,
   transformMessagesWithTtc
 };

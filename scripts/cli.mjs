@@ -1,17 +1,40 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_FILENAME = "ttc-message-transform.js";
+const AUTH_PROVIDER_ID = "the-token-company-plugin";
 
 const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(currentFile), "..");
 const sourcePluginPath = resolve(repoRoot, "opencode-plugins", PLUGIN_FILENAME);
 const pluginsDir = resolve(homedir(), ".config", "opencode", "plugins");
 const installedPluginPath = resolve(pluginsDir, PLUGIN_FILENAME);
+
+function getAuthStorePath() {
+  const xdgDataHome = String(process.env.XDG_DATA_HOME ?? "").trim();
+  const dataHome = xdgDataHome || resolve(homedir(), ".local", "share");
+  return resolve(dataHome, "opencode", "auth.json");
+}
+
+function hasAuthStoreKey() {
+  const authPath = getAuthStorePath();
+  if (!existsSync(authPath)) {
+    return { hasKey: false, path: authPath };
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(authPath, "utf8"));
+    const auth = parsed?.[AUTH_PROVIDER_ID];
+    const hasKey = Boolean(auth && auth.type === "api" && String(auth.key ?? "").trim());
+    return { hasKey, path: authPath };
+  } catch {
+    return { hasKey: false, path: authPath };
+  }
+}
 
 function printUsage() {
   console.log("Usage: opencode-ttc-plugin <install|doctor|uninstall>");
@@ -39,11 +62,16 @@ function install() {
 }
 
 function doctor() {
+  const authStore = hasAuthStoreKey();
+  const envHasKey = Boolean(process.env.TTC_API_KEY);
+  const authSource = envHasKey ? "env" : authStore.hasKey ? "auth-store" : "missing";
   const checks = [
     { label: "source plugin", ok: existsSync(sourcePluginPath), value: sourcePluginPath },
     { label: "plugins dir", ok: existsSync(pluginsDir), value: pluginsDir },
     { label: "installed plugin", ok: existsSync(installedPluginPath), value: installedPluginPath },
-    { label: "TTC_API_KEY env", ok: Boolean(process.env.TTC_API_KEY), value: process.env.TTC_API_KEY ? "set" : "missing" }
+    { label: "TTC_API_KEY env", ok: envHasKey, value: envHasKey ? "set" : "missing" },
+    { label: `auth store (${AUTH_PROVIDER_ID})`, ok: authStore.hasKey, value: authStore.hasKey ? `set (${authStore.path})` : `missing (${authStore.path})` },
+    { label: "effective auth source", ok: authSource !== "missing", value: authSource }
   ];
 
   let hasFailure = false;
