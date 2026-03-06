@@ -1,33 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
-
-import { buildTtcPluginConfig, transformMessagesWithTtc } from "../opencode-plugins/ttc-message-transform-core.js";
-
-function readDotEnvLocal() {
-  const envPath = resolve(process.cwd(), ".env.local");
-  if (!existsSync(envPath)) return {};
-
-  const content = readFileSync(envPath, "utf8");
-  const parsed = {};
-
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const idx = trimmed.indexOf("=");
-    if (idx <= 0) continue;
-    const key = trimmed.slice(0, idx).trim();
-    let value = trimmed.slice(idx + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    parsed[key] = value;
-  }
-
-  return parsed;
-}
+import { buildTtcPluginConfig, transformMessagesWithTtc } from "../opencode-plugins/ttc-message-transform.js";
 
 function buildSmokeOutput() {
   const seed = [
@@ -63,16 +34,11 @@ function buildSmokeOutput() {
 }
 
 async function main() {
-  const envLocal = readDotEnvLocal();
-  const mergedEnv = {
-    ...envLocal,
-    ...process.env
-  };
-  const config = buildTtcPluginConfig(mergedEnv);
+  const config = buildTtcPluginConfig(process.env);
 
   if (!config.apiKey) {
     console.error("Missing TTC_API_KEY.");
-    console.error("Set it in .env.local at repo root or export it in your shell.");
+    console.error("Export it in your shell before running the smoke check.");
     process.exitCode = 1;
     return;
   }

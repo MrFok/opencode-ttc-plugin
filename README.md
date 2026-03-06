@@ -64,10 +64,10 @@ npm test
 
 ## Local Smoke Test
 
-- Put your TTC key in `.env.local` at repo root:
+- Export your TTC key in your shell:
 
-```env
-TTC_API_KEY=<your-token-company-key>
+```bash
+export TTC_API_KEY=<your-token-company-key>
 ```
 
 - Run:

@@ -26,12 +26,9 @@ Validate the plugin end-to-end locally before packaging and publishing.
 
 ## Phase C: Auth Strategy Validation
 
-- prototype OpenCode auth-store flow for one-time key setup
-- verify transform hook can read stored credentials safely
-- define final resolution order:
-  1. OpenCode auth store key
-  2. `TTC_API_KEY` env override (optional)
-  3. fail-open no-op when no key present
+- v1 scope: env-only auth via `TTC_API_KEY`
+- verify no key present results in fail-open no-op
+- defer OpenCode auth-store integration to v1.1
 
 ## Phase D: Packaging Readiness
 
