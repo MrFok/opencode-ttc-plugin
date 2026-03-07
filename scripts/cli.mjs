@@ -261,13 +261,18 @@ function doctor(options = { verbose: false }) {
   const behavior = resolveBehaviorFromSources(settings);
   const envHasKey = Boolean(process.env.TTC_API_KEY);
   const authSource = envHasKey ? "env" : authStore.hasKey ? "auth-store" : "missing";
+  const hasUsableAuth = authSource !== "missing";
   const checks = [
     { label: "source plugin", ok: existsSync(sourcePluginPath), value: sourcePluginPath },
     { label: "plugins dir", ok: existsSync(pluginsDir), value: pluginsDir },
     { label: "installed plugin", ok: existsSync(installedPluginPath), value: installedPluginPath },
-    { label: "TTC_API_KEY env", ok: envHasKey, value: envHasKey ? "set" : "missing" },
-    { label: `auth store (${AUTH_PROVIDER_ID})`, ok: authStore.hasKey, value: authStore.hasKey ? `set (${authStore.path})` : `missing (${authStore.path})` },
-    { label: "effective auth source", ok: authSource !== "missing", value: authSource },
+    { label: "TTC_API_KEY env (optional override)", ok: true, value: envHasKey ? "set" : "missing" },
+    {
+      label: `auth store (${AUTH_PROVIDER_ID})`,
+      ok: true,
+      value: authStore.hasKey ? `set (${authStore.path})` : `missing (${authStore.path})`
+    },
+    { label: "effective auth source", ok: hasUsableAuth, value: authSource },
     {
       label: "effective aggressiveness",
       ok: true,

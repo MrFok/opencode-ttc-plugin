@@ -126,21 +126,26 @@ Runtime resolution order for aggressiveness:
 
 Use CLI config for normal setup. Env vars are advanced overrides.
 
-| Setting | Default | CLI command |
-| --- | --- | --- |
-| `enabled` | `true` | `opencode-ttc-plugin config set enabled true` |
-| `model` | `bear-1.2` | `opencode-ttc-plugin config set model bear-1.2` |
-| `minChars` | `400` | `opencode-ttc-plugin config set min-chars 400` |
-| `timeoutMs` | `2000` | `opencode-ttc-plugin config set timeout-ms 2000` |
-| `maxRetries` | `1` | `opencode-ttc-plugin config set max-retries 1` |
-| `retryBackoffMs` | `100` | `opencode-ttc-plugin config set retry-backoff-ms 100` |
-| `useGzip` | `true` | `opencode-ttc-plugin config set use-gzip true` |
-| `compressSystem` | `false` | `opencode-ttc-plugin config set compress-system false` |
-| `compressHistory` | `false` | `opencode-ttc-plugin config set compress-history false` |
-| `debug` | `false` | `opencode-ttc-plugin config set debug false` |
-| `cacheMaxEntries` | `1000` | `opencode-ttc-plugin config set cache-max-entries 1000` |
-| `toastOnActive` | `true` | `opencode-ttc-plugin config set toast-on-active true` |
-| `toastOnIdleSummary` | `true` | `opencode-ttc-plugin config set toast-on-idle-summary true` |
+| Setting | Default | What it does | CLI command |
+| --- | --- | --- | --- |
+| `enabled` | `true` | Master on/off switch for the transform hook | `opencode-ttc-plugin config set enabled true` |
+| `model` | `bear-1.2` | TTC model sent to `/v1/compress` | `opencode-ttc-plugin config set model bear-1.2` |
+| `minChars` | `400` | Skip compression for text shorter than this | `opencode-ttc-plugin config set min-chars 400` |
+| `timeoutMs` | `2000` | Request timeout per TTC call | `opencode-ttc-plugin config set timeout-ms 2000` |
+| `maxRetries` | `1` | Retry count for retryable TTC failures | `opencode-ttc-plugin config set max-retries 1` |
+| `retryBackoffMs` | `100` | Backoff base between retries | `opencode-ttc-plugin config set retry-backoff-ms 100` |
+| `useGzip` | `true` | Sends compressed request body to TTC | `opencode-ttc-plugin config set use-gzip true` |
+| `compressSystem` | `false` | Also compresses eligible `system` messages in context | `opencode-ttc-plugin config set compress-system false` |
+| `compressHistory` | `false` | Also compresses older eligible `user` history messages (not just latest user turn) | `opencode-ttc-plugin config set compress-history false` |
+| `debug` | `false` | Emits extra plugin debug logs | `opencode-ttc-plugin config set debug false` |
+| `cacheMaxEntries` | `1000` | Max in-memory dedupe cache entries | `opencode-ttc-plugin config set cache-max-entries 1000` |
+| `toastOnActive` | `true` | Shows one activation toast per session | `opencode-ttc-plugin config set toast-on-active true` |
+| `toastOnIdleSummary` | `true` | Shows idle summary toast with savings stats | `opencode-ttc-plugin config set toast-on-idle-summary true` |
+
+Notes on scope:
+- TTC API parameters used directly by this plugin request are primarily `model` and `compression_settings.aggressiveness`.
+- Most settings above are plugin-side controls (selection, retries, skipping, caching, and UX behavior).
+- For TTC API details, see `https://thetokencompany.com/docs`.
 
 Advanced overrides (optional):
 - `TTC_AGGRESSIVENESS`, `TTC_MIN_CHARS`, `TTC_TIMEOUT_MS`, `TTC_MAX_RETRIES`, `TTC_RETRY_BACKOFF_MS`
