@@ -15,7 +15,7 @@ The Token Company (YC W26) builds models that process tokens based on context an
 Paste this into your coding agent:
 
 ```text
-Install the @drfok/opencode-ttc-plugin and install the plugin by following: https://raw.githubusercontent.com/MrFok/opencode-ttc-plugin/dev/README.md
+Install the @drfok/opencode-ttc-plugin and install the plugin by following: https://raw.githubusercontent.com/MrFok/opencode-ttc-plugin/main/README.md
 ```
 
 ### Option B: Manual setup
