@@ -15,7 +15,7 @@ The Token Company (YC W26) builds models that process tokens based on context an
 Paste this into your coding agent:
 
 ```text
-Install @drfok/opencode-ttc-plugin, run opencode auth login, choose provider the-token-company-plugin, and set the TTC API key. If the key is missing, get one from https://thetokencompany.com/.
+Install @drfok/opencode-ttc-plugin, tell the user to run opencode auth login, choose provider the-token-company-plugin, and set the TTC API key, which they can obtain from here: https://thetokencompany.com/.
 ```
 
 ### Option B: Manual setup
@@ -43,16 +43,6 @@ opencode auth login
 ```bash
 opencode-ttc-plugin doctor --verbose
 ```
-
-### Option C: For LLM agents (step-by-step)
-
-1. `npm install -g @drfok/opencode-ttc-plugin`
-2. `opencode-ttc-plugin install`
-3. `opencode auth login`
-4. Select provider `the-token-company-plugin`
-5. Select method `Set TTC API Key`
-6. Paste API key from `https://thetokencompany.com/`
-7. `opencode-ttc-plugin doctor --verbose`
 
 ## 2) Configure compression aggressiveness
 
