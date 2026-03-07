@@ -57,9 +57,14 @@ npm install -g @drfok/opencode-ttc-plugin
 opencode-ttc-plugin install
 '''
 
-3. Tell the user to run `opencode auth login`, search for `the-token-company-plugin`, and enter their TTC API key, which they can get from https://thetokencompany.com/ and then finally verify by running `opencode-ttc-plugin doctor --verbose`
+Finally, tell the user to 
 
-4. Tell them to restart their OpenCode, and to watch for the toast when they start a session
+1. Run `opencode auth login`
+2. Search for `the-token-company-plugin`
+3. Enter their TTC API key (obtain from https://thetokencompany.com/)
+4. Verify by running `opencode-ttc-plugin doctor --verbose`
+
+5. Tell them to restart their OpenCode, and to watch for the toast when they start a session
 </details>
 
 ## 2) Configure compression aggressiveness
