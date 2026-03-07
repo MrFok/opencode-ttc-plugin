@@ -1,6 +1,6 @@
 {
   "name": "@drfok/opencode-ttc-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "type": "module",
   "description": "OpenCode plugin that allows input compression via The Token Company API",
