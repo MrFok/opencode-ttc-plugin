@@ -15,7 +15,6 @@ The Token Company (YC W26) builds models that process tokens based on context an
 Paste this into your coding agent:
 
 ```text
-Install @drfok/opencode-ttc-plugin, tell the user to run opencode auth login, choose provider the-token-company-plugin, and set the TTC API key, which they can obtain from here: https://thetokencompany.com/.
 Install the @drfok/opencode-ttc-plugin and install the plugin by following: https://raw.githubusercontent.com/MrFok/opencode-ttc-plugin/dev/README.md
 ```
 
