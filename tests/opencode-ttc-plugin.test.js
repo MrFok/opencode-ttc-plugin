@@ -7,6 +7,7 @@ import {
   getPluginConfigPath,
   getAuthStorePath,
   getSkipReasonForText,
+  resolveBehaviorConfig,
   resolveCompressionConfig,
   resolveLockedBaseUrl,
   resolvePluginSettings,
@@ -340,6 +341,44 @@ test("resolveCompressionConfig falls back to default", () => {
   assert.equal(resolved.aggressiveness, 0.1);
   assert.equal(resolved.level, "balanced");
   assert.equal(resolved.source, "default");
+});
+
+test("resolveBehaviorConfig uses plugin config when env is absent", () => {
+  const resolved = resolveBehaviorConfig({
+    env: {},
+    settings: {
+      minChars: 123,
+      timeoutMs: 555,
+      compressSystem: true,
+      toastOnActive: false,
+      model: "bear-1.1"
+    }
+  });
+
+  assert.equal(resolved.values.minChars, 123);
+  assert.equal(resolved.values.timeoutMs, 555);
+  assert.equal(resolved.values.compressSystem, true);
+  assert.equal(resolved.values.toastOnActive, false);
+  assert.equal(resolved.values.model, "bear-1.1");
+  assert.equal(resolved.sources.minChars, "plugin_config");
+});
+
+test("resolveBehaviorConfig keeps env override precedence", () => {
+  const resolved = resolveBehaviorConfig({
+    env: {
+      TTC_MIN_CHARS: "777",
+      TTC_USE_GZIP: "false"
+    },
+    settings: {
+      minChars: 222,
+      useGzip: true
+    }
+  });
+
+  assert.equal(resolved.values.minChars, 777);
+  assert.equal(resolved.values.useGzip, false);
+  assert.equal(resolved.sources.minChars, "env");
+  assert.equal(resolved.sources.useGzip, "env");
 });
 
 test("resolves auth store path from XDG_DATA_HOME", () => {

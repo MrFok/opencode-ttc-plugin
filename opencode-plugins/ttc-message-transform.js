@@ -82,6 +82,11 @@ function normalizeCompressionLevel(level) {
   return Object.prototype.hasOwnProperty.call(COMPRESSION_LEVELS, normalized) ? normalized : "";
 }
 
+function parseStringValue(rawValue, fallbackValue) {
+  const parsed = String(rawValue ?? "").trim();
+  return parsed ? parsed : fallbackValue;
+}
+
 function summarizeUrlForLog(rawValue) {
   const raw = String(rawValue ?? "").trim();
   if (!raw) return "empty";
@@ -358,6 +363,164 @@ function resolveCompressionConfig({
     level: "balanced",
     source: "default"
   };
+}
+
+function hasSettingValue(rawValue) {
+  if (rawValue === undefined || rawValue === null) return false;
+  if (typeof rawValue === "string") return rawValue.trim() !== "";
+  return true;
+}
+
+function resolveValueWithSource({
+  envValue,
+  settingsValue,
+  defaultValue,
+  parse,
+  envKey,
+  settingKey
+}) {
+  if (hasEnvValue(envValue)) {
+    return {
+      value: parse(envValue, defaultValue),
+      source: "env",
+      sourceKey: envKey
+    };
+  }
+
+  if (hasSettingValue(settingsValue)) {
+    return {
+      value: parse(settingsValue, defaultValue),
+      source: "plugin_config",
+      sourceKey: settingKey
+    };
+  }
+
+  return {
+    value: defaultValue,
+    source: "default",
+    sourceKey: ""
+  };
+}
+
+function resolveBehaviorConfig({
+  env = process.env,
+  settings = {}
+} = {}) {
+  const resolved = {
+    enabled: resolveValueWithSource({
+      envValue: env.TTC_ENABLED,
+      settingsValue: settings.enabled,
+      defaultValue: DEFAULT_CONFIG.enabled,
+      parse: parseBoolean,
+      envKey: "TTC_ENABLED",
+      settingKey: "enabled"
+    }),
+    model: resolveValueWithSource({
+      envValue: env.TTC_MODEL,
+      settingsValue: settings.model,
+      defaultValue: DEFAULT_CONFIG.model,
+      parse: parseStringValue,
+      envKey: "TTC_MODEL",
+      settingKey: "model"
+    }),
+    minChars: resolveValueWithSource({
+      envValue: env.TTC_MIN_CHARS,
+      settingsValue: settings.minChars,
+      defaultValue: DEFAULT_CONFIG.minChars,
+      parse: parseIntValue,
+      envKey: "TTC_MIN_CHARS",
+      settingKey: "minChars"
+    }),
+    timeoutMs: resolveValueWithSource({
+      envValue: env.TTC_TIMEOUT_MS,
+      settingsValue: settings.timeoutMs,
+      defaultValue: DEFAULT_CONFIG.timeoutMs,
+      parse: parseIntValue,
+      envKey: "TTC_TIMEOUT_MS",
+      settingKey: "timeoutMs"
+    }),
+    maxRetries: resolveValueWithSource({
+      envValue: env.TTC_MAX_RETRIES,
+      settingsValue: settings.maxRetries,
+      defaultValue: DEFAULT_CONFIG.maxRetries,
+      parse: parseIntValue,
+      envKey: "TTC_MAX_RETRIES",
+      settingKey: "maxRetries"
+    }),
+    retryBackoffMs: resolveValueWithSource({
+      envValue: env.TTC_RETRY_BACKOFF_MS,
+      settingsValue: settings.retryBackoffMs,
+      defaultValue: DEFAULT_CONFIG.retryBackoffMs,
+      parse: parseIntValue,
+      envKey: "TTC_RETRY_BACKOFF_MS",
+      settingKey: "retryBackoffMs"
+    }),
+    useGzip: resolveValueWithSource({
+      envValue: env.TTC_USE_GZIP,
+      settingsValue: settings.useGzip,
+      defaultValue: DEFAULT_CONFIG.useGzip,
+      parse: parseBoolean,
+      envKey: "TTC_USE_GZIP",
+      settingKey: "useGzip"
+    }),
+    compressSystem: resolveValueWithSource({
+      envValue: env.TTC_COMPRESS_SYSTEM,
+      settingsValue: settings.compressSystem,
+      defaultValue: DEFAULT_CONFIG.compressSystem,
+      parse: parseBoolean,
+      envKey: "TTC_COMPRESS_SYSTEM",
+      settingKey: "compressSystem"
+    }),
+    compressHistory: resolveValueWithSource({
+      envValue: env.TTC_COMPRESS_HISTORY,
+      settingsValue: settings.compressHistory,
+      defaultValue: DEFAULT_CONFIG.compressHistory,
+      parse: parseBoolean,
+      envKey: "TTC_COMPRESS_HISTORY",
+      settingKey: "compressHistory"
+    }),
+    debug: resolveValueWithSource({
+      envValue: env.TTC_DEBUG,
+      settingsValue: settings.debug,
+      defaultValue: DEFAULT_CONFIG.debug,
+      parse: parseBoolean,
+      envKey: "TTC_DEBUG",
+      settingKey: "debug"
+    }),
+    cacheMaxEntries: resolveValueWithSource({
+      envValue: env.TTC_CACHE_MAX_ENTRIES,
+      settingsValue: settings.cacheMaxEntries,
+      defaultValue: DEFAULT_CONFIG.cacheMaxEntries,
+      parse: parseIntValue,
+      envKey: "TTC_CACHE_MAX_ENTRIES",
+      settingKey: "cacheMaxEntries"
+    }),
+    toastOnActive: resolveValueWithSource({
+      envValue: env.TTC_TOAST_ON_ACTIVE,
+      settingsValue: settings.toastOnActive,
+      defaultValue: DEFAULT_CONFIG.toastOnActive,
+      parse: parseBoolean,
+      envKey: "TTC_TOAST_ON_ACTIVE",
+      settingKey: "toastOnActive"
+    }),
+    toastOnIdleSummary: resolveValueWithSource({
+      envValue: env.TTC_TOAST_ON_IDLE_SUMMARY,
+      settingsValue: settings.toastOnIdleSummary,
+      defaultValue: DEFAULT_CONFIG.toastOnIdleSummary,
+      parse: parseBoolean,
+      envKey: "TTC_TOAST_ON_IDLE_SUMMARY",
+      settingKey: "toastOnIdleSummary"
+    })
+  };
+
+  const values = Object.fromEntries(
+    Object.entries(resolved).map(([key, payload]) => [key, payload.value])
+  );
+  const sources = Object.fromEntries(
+    Object.entries(resolved).map(([key, payload]) => [key, payload.source])
+  );
+
+  return { values, sources };
 }
 
 async function resolveApiKeyFromAuthStore({
@@ -708,6 +871,11 @@ async function transformMessagesWithTtc({
 const TtcMessageTransformPlugin = async ({ client }) => {
   const config = buildTtcPluginConfig();
   const pluginSettings = await resolvePluginSettings();
+  const behaviorResolution = resolveBehaviorConfig({
+    env: process.env,
+    settings: pluginSettings
+  });
+  Object.assign(config, behaviorResolution.values);
   const compressionResolution = resolveCompressionConfig({
     env: process.env,
     settings: pluginSettings,
@@ -735,6 +903,7 @@ const TtcMessageTransformPlugin = async ({ client }) => {
     auth_provider_id: AUTH_PROVIDER_ID,
     auth_source: apiKeyResolution.source,
     base_url_source: config.baseUrlSource,
+    behavior_sources: behaviorResolution.sources,
     compression_source: compressionResolution.source,
     compression_level: compressionResolution.level || "custom",
     base_url: config.baseUrl,
@@ -809,6 +978,7 @@ TtcMessageTransformPlugin._test = {
   getPluginConfigPath,
   resolvePluginSettings,
   resolveCompressionConfig,
+  resolveBehaviorConfig,
   resolveLockedBaseUrl,
   getAuthStorePath,
   resolveApiKeyFromAuthStore,

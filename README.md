@@ -8,120 +8,134 @@ The Token Company (YC W26) builds models that process tokens based on context an
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](./LICENSE)
 [![X (Twitter)](https://img.shields.io/badge/X-%40drfok-111111.svg)](https://x.com/drfok)
 
-## Quick Start
+## 1) Setup
 
-Install from npm and register the plugin with OpenCode:
+### Option A: Let an LLM do it
+
+Paste this into your coding agent:
+
+```text
+Install @drfok/opencode-ttc-plugin, run opencode auth login, choose provider the-token-company-plugin, and set the TTC API key. If the key is missing, get one from https://thetokencompany.com/.
+```
+
+### Option B: Manual setup
+
+1. Install and register plugin:
 
 ```bash
 npm install -g @drfok/opencode-ttc-plugin
 opencode-ttc-plugin install
 ```
 
-Set your TTC API key once in OpenCode auth store:
-
-1. Run `/connect` in OpenCode.
-2. Choose `the-token-company-plugin`.
-3. Select `Set TTC API Key` and paste your key.
-
-Optional override (advanced):
+2. Configure auth in OpenCode:
 
 ```bash
-export TTC_API_KEY=<your-token-company-key>
+opencode auth login
 ```
 
-## Configuration
+3. In the auth flow choose:
+- provider: `the-token-company-plugin`
+- method: `Set TTC API Key`
+- paste key from `https://thetokencompany.com/`
 
-Environment variables:
-
-```env
-TTC_ENABLED=true
-TTC_API_KEY=<token-company-key>
-# Optional; locked to TTC host only for security
-TTC_BASE_URL=https://api.thetokencompany.com
-TTC_MODEL=bear-1.2
-TTC_AGGRESSIVENESS=0.1
-TTC_MIN_CHARS=400
-TTC_TIMEOUT_MS=2000
-TTC_MAX_RETRIES=1
-TTC_RETRY_BACKOFF_MS=100
-TTC_USE_GZIP=true
-TTC_COMPRESS_SYSTEM=false
-TTC_COMPRESS_HISTORY=false
-TTC_DEBUG=false
-TTC_CACHE_MAX_ENTRIES=1000
-TTC_TOAST_ON_ACTIVE=true
-TTC_TOAST_ON_IDLE_SUMMARY=true
-```
-
-See `.env.example` for the same defaults.
-
-API key resolution order:
-
-1. `TTC_API_KEY` environment variable (optional override)
-2. OpenCode auth store entry for `the-token-company-plugin` (recommended default)
-3. fail-open no-op (plugin stays inactive)
-
-Compression setting resolution order:
-
-1. `TTC_AGGRESSIVENESS` environment variable (optional override)
-2. Plugin config file `~/.config/opencode/ttc-plugin.json`
-3. Built-in default (`balanced` = `0.1`)
-
-Network egress policy:
-
-- Compression requests are pinned to `https://api.thetokencompany.com`.
-- Any invalid/custom `TTC_BASE_URL` value is ignored and the plugin falls back to the pinned host.
-- A socket/network alert from your firewall is expected on first use because the plugin makes an outbound HTTPS API call.
-
-## Behavior
-
-- Compresses eligible outbound text through `experimental.chat.messages.transform`.
-- Fail-open by design: TTC errors and timeouts never block model requests.
-- Skips high-risk content (code fences, diffs, likely JSON/schema-sensitive, synthetic parts).
-- Uses in-memory dedupe cache by session/message/part/hash and compression settings.
-- Emits structured logs without raw prompt text or secret values.
-- Shows activation and idle-summary toasts with savings estimates.
-
-## CLI Commands
+4. Verify:
 
 ```bash
-opencode-ttc-plugin install
-opencode-ttc-plugin doctor
 opencode-ttc-plugin doctor --verbose
-opencode-ttc-plugin uninstall
-opencode-ttc-plugin config get
+```
+
+### Option C: For LLM agents (step-by-step)
+
+1. `npm install -g @drfok/opencode-ttc-plugin`
+2. `opencode-ttc-plugin install`
+3. `opencode auth login`
+4. Select provider `the-token-company-plugin`
+5. Select method `Set TTC API Key`
+6. Paste API key from `https://thetokencompany.com/`
+7. `opencode-ttc-plugin doctor --verbose`
+
+## 2) Configure compression aggressiveness
+
+Primary control is aggressiveness. You can set it by named level (recommended) or exact numeric value.
+
+Set by level:
+
+```bash
 opencode-ttc-plugin config set level balanced
+```
+
+Set exact value:
+
+```bash
 opencode-ttc-plugin config set aggressiveness 0.25
-opencode-ttc-plugin config reset
 ```
 
-Compression presets:
-
-- `low` = `0.05`
-- `balanced` = `0.1`
-- `high` = `0.2`
-- `max` = `0.3`
-
-Equivalent source-repo scripts:
+Inspect active config:
 
 ```bash
-npm run plugin:install
-npm run plugin:doctor
-npm run plugin:uninstall
+opencode-ttc-plugin config get
+opencode-ttc-plugin doctor --verbose
 ```
 
-## Development
+Compression levels:
 
-Run tests:
+| Level | Aggressiveness | Typical tradeoff |
+| --- | --- | --- |
+| `low` | `0.05` | Minimal changes, conservative compression |
+| `balanced` | `0.10` | Default; good savings with stable quality |
+| `high` | `0.20` | Stronger compression, better token reduction |
+| `max` | `0.30` | Most aggressive preset in this plugin |
 
-```bash
-npm test
-```
+Why these values exist:
+- TTC API exposes aggressiveness on a `0.0-1.0` range in their docs: `https://thetokencompany.com/docs`
+- TTC benchmark data shows quality/token tradeoffs vary by aggressiveness: `https://www.thetokencompany.com/benchmarks/accuracy`
 
-Run smoke check:
+Runtime resolution order for aggressiveness:
+1. `TTC_AGGRESSIVENESS` env var (override)
+2. plugin config file `~/.config/opencode/ttc-plugin.json`
+3. built-in default (`balanced` = `0.1`)
 
-```bash
-npm run smoke:plugin
-```
+## 3) CLI commands
 
-The smoke output reports only metadata (`changed`, char counts, reason), not raw prompt text.
+| Command | What it does |
+| --- | --- |
+| `opencode-ttc-plugin install` | Installs plugin file into `~/.config/opencode/plugins` |
+| `opencode-ttc-plugin doctor` | Runs setup/auth checks |
+| `opencode-ttc-plugin doctor --verbose` | Shows effective config sources and resolution order |
+| `opencode-ttc-plugin uninstall` | Removes installed plugin file |
+| `opencode-ttc-plugin config get` | Prints plugin config and effective aggressiveness |
+| `opencode-ttc-plugin config set level <low\|balanced\|high\|max>` | Sets named aggressiveness level |
+| `opencode-ttc-plugin config set aggressiveness <0..1>` | Sets numeric aggressiveness |
+| `opencode-ttc-plugin config set <setting> <value>` | Sets behavior settings (see table below) |
+| `opencode-ttc-plugin config reset` | Removes plugin config file |
+
+## Behavior settings
+
+Use CLI config for normal setup. Env vars are advanced overrides.
+
+| Setting | Default | CLI command |
+| --- | --- | --- |
+| `enabled` | `true` | `opencode-ttc-plugin config set enabled true` |
+| `model` | `bear-1.2` | `opencode-ttc-plugin config set model bear-1.2` |
+| `minChars` | `400` | `opencode-ttc-plugin config set min-chars 400` |
+| `timeoutMs` | `2000` | `opencode-ttc-plugin config set timeout-ms 2000` |
+| `maxRetries` | `1` | `opencode-ttc-plugin config set max-retries 1` |
+| `retryBackoffMs` | `100` | `opencode-ttc-plugin config set retry-backoff-ms 100` |
+| `useGzip` | `true` | `opencode-ttc-plugin config set use-gzip true` |
+| `compressSystem` | `false` | `opencode-ttc-plugin config set compress-system false` |
+| `compressHistory` | `false` | `opencode-ttc-plugin config set compress-history false` |
+| `debug` | `false` | `opencode-ttc-plugin config set debug false` |
+| `cacheMaxEntries` | `1000` | `opencode-ttc-plugin config set cache-max-entries 1000` |
+| `toastOnActive` | `true` | `opencode-ttc-plugin config set toast-on-active true` |
+| `toastOnIdleSummary` | `true` | `opencode-ttc-plugin config set toast-on-idle-summary true` |
+
+Advanced overrides (optional):
+- `TTC_AGGRESSIVENESS`, `TTC_MIN_CHARS`, `TTC_TIMEOUT_MS`, `TTC_MAX_RETRIES`, `TTC_RETRY_BACKOFF_MS`
+- `TTC_USE_GZIP`, `TTC_COMPRESS_SYSTEM`, `TTC_COMPRESS_HISTORY`, `TTC_DEBUG`
+- `TTC_CACHE_MAX_ENTRIES`, `TTC_TOAST_ON_ACTIVE`, `TTC_TOAST_ON_IDLE_SUMMARY`, `TTC_MODEL`, `TTC_ENABLED`
+
+## Security and network policy
+
+- Compression egress is pinned to `https://api.thetokencompany.com`.
+- Custom/invalid `TTC_BASE_URL` is ignored and safely falls back to pinned host.
+- If your firewall prompts about outbound socket traffic, that is expected on first compression request.

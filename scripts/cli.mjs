@@ -15,6 +15,38 @@ const COMPRESSION_LEVELS = {
   max: 0.3
 };
 
+const DEFAULT_BEHAVIOR_SETTINGS = {
+  enabled: true,
+  model: "bear-1.2",
+  minChars: 400,
+  timeoutMs: 2000,
+  maxRetries: 1,
+  retryBackoffMs: 100,
+  useGzip: true,
+  compressSystem: false,
+  compressHistory: false,
+  debug: false,
+  cacheMaxEntries: 1000,
+  toastOnActive: true,
+  toastOnIdleSummary: true
+};
+
+const BEHAVIOR_ENV_KEYS = {
+  enabled: "TTC_ENABLED",
+  model: "TTC_MODEL",
+  minChars: "TTC_MIN_CHARS",
+  timeoutMs: "TTC_TIMEOUT_MS",
+  maxRetries: "TTC_MAX_RETRIES",
+  retryBackoffMs: "TTC_RETRY_BACKOFF_MS",
+  useGzip: "TTC_USE_GZIP",
+  compressSystem: "TTC_COMPRESS_SYSTEM",
+  compressHistory: "TTC_COMPRESS_HISTORY",
+  debug: "TTC_DEBUG",
+  cacheMaxEntries: "TTC_CACHE_MAX_ENTRIES",
+  toastOnActive: "TTC_TOAST_ON_ACTIVE",
+  toastOnIdleSummary: "TTC_TOAST_ON_IDLE_SUMMARY"
+};
+
 const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(currentFile), "..");
 const sourcePluginPath = resolve(repoRoot, "opencode-plugins", PLUGIN_FILENAME);
@@ -43,6 +75,18 @@ function parseAggressiveness(value) {
   if (!Number.isFinite(parsed)) return null;
   if (parsed < 0 || parsed > 1) return null;
   return parsed;
+}
+
+function parseBoolean(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  return null;
+}
+
+function parseInteger(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
 function hasEnvValue(rawValue) {
@@ -109,6 +153,60 @@ function resolveCompressionFromSources(settings) {
   };
 }
 
+function resolveBehaviorFromSources(settings) {
+  const parseBySetting = {
+    enabled: parseBoolean,
+    model: (value) => {
+      const parsed = String(value ?? "").trim();
+      return parsed || null;
+    },
+    minChars: parseInteger,
+    timeoutMs: parseInteger,
+    maxRetries: parseInteger,
+    retryBackoffMs: parseInteger,
+    useGzip: parseBoolean,
+    compressSystem: parseBoolean,
+    compressHistory: parseBoolean,
+    debug: parseBoolean,
+    cacheMaxEntries: parseInteger,
+    toastOnActive: parseBoolean,
+    toastOnIdleSummary: parseBoolean
+  };
+
+  const resolved = {};
+  for (const [settingKey, defaultValue] of Object.entries(DEFAULT_BEHAVIOR_SETTINGS)) {
+    const envKey = BEHAVIOR_ENV_KEYS[settingKey];
+    const envRawValue = process.env[envKey];
+    const parse = parseBySetting[settingKey];
+
+    if (hasEnvValue(envRawValue)) {
+      const parsed = parse(envRawValue);
+      resolved[settingKey] = {
+        value: parsed === null ? defaultValue : parsed,
+        source: "env"
+      };
+      continue;
+    }
+
+    const settingRawValue = settings?.[settingKey];
+    if (settingRawValue !== undefined && settingRawValue !== null && String(settingRawValue).trim() !== "") {
+      const parsed = parse(settingRawValue);
+      resolved[settingKey] = {
+        value: parsed === null ? defaultValue : parsed,
+        source: "plugin-config"
+      };
+      continue;
+    }
+
+    resolved[settingKey] = {
+      value: defaultValue,
+      source: "default"
+    };
+  }
+
+  return resolved;
+}
+
 function hasAuthStoreKey() {
   const authPath = getAuthStorePath();
   if (!existsSync(authPath)) {
@@ -131,6 +229,7 @@ function printUsage() {
   console.log("       opencode-ttc-plugin config get");
   console.log("       opencode-ttc-plugin config set level <low|balanced|high|max>");
   console.log("       opencode-ttc-plugin config set aggressiveness <0..1>");
+  console.log("       opencode-ttc-plugin config set <setting> <value>");
   console.log("       opencode-ttc-plugin config reset");
 }
 
@@ -159,6 +258,7 @@ function doctor(options = { verbose: false }) {
   const authStore = hasAuthStoreKey();
   const { path: configPath, settings } = readPluginSettings();
   const compression = resolveCompressionFromSources(settings);
+  const behavior = resolveBehaviorFromSources(settings);
   const envHasKey = Boolean(process.env.TTC_API_KEY);
   const authSource = envHasKey ? "env" : authStore.hasKey ? "auth-store" : "missing";
   const checks = [
@@ -172,6 +272,16 @@ function doctor(options = { verbose: false }) {
       label: "effective aggressiveness",
       ok: true,
       value: `${compression.aggressiveness} (${compression.source}${compression.level ? `:${compression.level}` : ""})`
+    },
+    {
+      label: "effective min chars",
+      ok: true,
+      value: `${behavior.minChars.value} (${behavior.minChars.source})`
+    },
+    {
+      label: "effective timeout ms",
+      ok: true,
+      value: `${behavior.timeoutMs.value} (${behavior.timeoutMs.source})`
     }
   ];
 
@@ -190,15 +300,24 @@ function doctor(options = { verbose: false }) {
     console.log(`[INFO] plugin config path: ${configPath}`);
     console.log(`[INFO] plugin config keys: ${Object.keys(settings).sort().join(",") || "none"}`);
     console.log(`[INFO] resolution order: env -> plugin-config -> default`);
+    for (const key of Object.keys(DEFAULT_BEHAVIOR_SETTINGS)) {
+      const entry = behavior[key];
+      console.log(`[INFO] effective ${key}: ${entry.value} (${entry.source})`);
+    }
   }
 }
 
 function configGet() {
   const { path: configPath, settings } = readPluginSettings();
   const compression = resolveCompressionFromSources(settings);
+  const behavior = resolveBehaviorFromSources(settings);
   console.log(`Config path: ${configPath}`);
   console.log(JSON.stringify(settings, null, 2));
   console.log(`Effective aggressiveness: ${compression.aggressiveness} (${compression.source}${compression.level ? `:${compression.level}` : ""})`);
+  for (const key of Object.keys(DEFAULT_BEHAVIOR_SETTINGS)) {
+    const entry = behavior[key];
+    console.log(`Effective ${key}: ${entry.value} (${entry.source})`);
+  }
 }
 
 function configSetLevel(level) {
@@ -231,6 +350,49 @@ function configSetAggressiveness(value) {
   console.log(`Saved aggressiveness=${parsed} at ${configPath}`);
 }
 
+const CONFIG_SETTERS = {
+  enabled: { settingKey: "enabled", parse: parseBoolean, usage: "true|false" },
+  model: {
+    settingKey: "model",
+    parse: (value) => {
+      const parsed = String(value ?? "").trim();
+      return parsed || null;
+    },
+    usage: "<model-id>"
+  },
+  "min-chars": { settingKey: "minChars", parse: parseInteger, usage: "<int>" },
+  "timeout-ms": { settingKey: "timeoutMs", parse: parseInteger, usage: "<int>" },
+  "max-retries": { settingKey: "maxRetries", parse: parseInteger, usage: "<int>" },
+  "retry-backoff-ms": { settingKey: "retryBackoffMs", parse: parseInteger, usage: "<int>" },
+  "use-gzip": { settingKey: "useGzip", parse: parseBoolean, usage: "true|false" },
+  "compress-system": { settingKey: "compressSystem", parse: parseBoolean, usage: "true|false" },
+  "compress-history": { settingKey: "compressHistory", parse: parseBoolean, usage: "true|false" },
+  debug: { settingKey: "debug", parse: parseBoolean, usage: "true|false" },
+  "cache-max-entries": { settingKey: "cacheMaxEntries", parse: parseInteger, usage: "<int>" },
+  "toast-on-active": { settingKey: "toastOnActive", parse: parseBoolean, usage: "true|false" },
+  "toast-on-idle-summary": { settingKey: "toastOnIdleSummary", parse: parseBoolean, usage: "true|false" }
+};
+
+function configSetBehaviorSetting(key, value) {
+  const descriptor = CONFIG_SETTERS[key];
+  if (!descriptor) {
+    return false;
+  }
+
+  const parsed = descriptor.parse(value);
+  if (parsed === null) {
+    console.error(`Invalid value for ${key}. Expected ${descriptor.usage}`);
+    process.exitCode = 1;
+    return true;
+  }
+
+  const { settings } = readPluginSettings();
+  settings[descriptor.settingKey] = parsed;
+  const configPath = writePluginSettings(settings);
+  console.log(`Saved ${descriptor.settingKey}=${parsed} at ${configPath}`);
+  return true;
+}
+
 function configReset() {
   const configPath = getPluginConfigPath();
   if (!existsSync(configPath)) {
@@ -259,8 +421,8 @@ function configCommand(args) {
       configSetAggressiveness(value);
       return;
     }
-    console.error("Invalid config set usage. Use 'config set level <value>' or 'config set aggressiveness <value>'");
-    process.exitCode = 1;
+    if (configSetBehaviorSetting(key, value)) return;
+    console.error(`Invalid config set usage. Supported settings: ${Object.keys(CONFIG_SETTERS).join(", ")}`);
     return;
   }
 
