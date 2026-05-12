@@ -19,12 +19,23 @@
   },
   "exports": {
     ".": "./opencode-plugins/ttc-message-transform.js",
+    "./server": "./opencode-plugins/ttc-message-transform.js",
+    "./tui": "./tui/index.tsx",
+    "./tui-settings": "./tui/settings.js",
+    "./tui-state": "./tui/sidebar-state.js",
     "./plugin": "./opencode-plugins/ttc-message-transform.js",
     "./plugin-core": "./opencode-plugins/ttc-message-transform-core.js"
   },
+  "oc-plugin": [
+    "server",
+    "tui"
+  ],
   "files": [
     "opencode-plugins/ttc-message-transform.js",
     "opencode-plugins/ttc-message-transform-core.js",
+    "tui/index.tsx",
+    "tui/settings.js",
+    "tui/sidebar-state.js",
     "scripts/cli.mjs",
     "README.md",
     ".env.example",
@@ -33,6 +44,14 @@
   ],
   "engines": {
     "node": ">=20"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.4.0"
+  },
+  "dependencies": {
+    "@opentui/core": ">=0.1.97",
+    "@opentui/solid": ">=0.1.97",
+    "solid-js": "^1.9.11"
   },
   "main": "opencode-plugins/ttc-message-transform.js",
   "devDependencies": {},
