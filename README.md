@@ -13,12 +13,12 @@ Modern OpenCode builds also load a TTC sidebar widget. Compression still runs in
 
 ## 1) Setup
 
-### Option A: Let an LLM do it
+### Option A: Agent-assisted setup
 
 Paste this into your coding agent:
 
 ```text
-Install the @drfok/opencode-ttc-plugin and install the plugin by following: https://raw.githubusercontent.com/MrFok/opencode-ttc-plugin/main/README.md
+Install @drfok/opencode-ttc-plugin by following: https://raw.githubusercontent.com/MrFok/opencode-ttc-plugin/main/README.md
 ```
 
 ### Option B: Manual setup
@@ -36,7 +36,7 @@ If you are on an older OpenCode build without package plugin target support, use
 opencode-ttc-plugin install
 ```
 
-3. Configure auth in OpenCode:
+2. Configure auth in OpenCode:
 
 ```bash
 opencode auth login
@@ -53,7 +53,7 @@ opencode auth login
 opencode-ttc-plugin doctor --verbose
 ```
 
-5. Restart OpenCode. In a session, the sidebar should include `TTC Compression` with the latest message and session savings. Toasts remain as a fallback/configurable summary path.
+5. Restart OpenCode. In a session, the sidebar should include `Token Compression` with the latest message and session savings. Toasts remain as a fallback/configurable summary path.
 
 <details>
 <summary>For LLMs</summary>

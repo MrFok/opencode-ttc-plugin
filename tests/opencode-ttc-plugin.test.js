@@ -297,6 +297,7 @@ test("rejects malformed TTC_BASE_URL values", () => {
 
 test("uses locked TTC host in requests and stays fail-open on request error", async () => {
   let calledUrl = "";
+  let requestOptions = null;
   const output = createOutput("this message should fail-open when request fails");
   const client = createClient();
   const config = buildTtcPluginConfig({ TTC_API_KEY: "ttc_test_key", TTC_BASE_URL: "https://example.com" });
@@ -311,13 +312,15 @@ test("uses locked TTC host in requests and stays fail-open on request error", as
       maxRetries: 0
     },
     cache: new Map(),
-    fetchImpl: async (url) => {
+    fetchImpl: async (url, options) => {
       calledUrl = String(url);
+      requestOptions = options;
       throw new Error("network down");
     }
   });
 
   assert.equal(calledUrl, "https://api.thetokencompany.com/v1/compress");
+  assert.equal(requestOptions.redirect, "error");
   assert.equal(output.messages[0].parts[0].text, "this message should fail-open when request fails");
 });
 

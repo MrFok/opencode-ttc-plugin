@@ -49,9 +49,9 @@
     "@opencode-ai/plugin": ">=1.4.0"
   },
   "dependencies": {
-    "@opentui/core": ">=0.1.97",
-    "@opentui/solid": ">=0.1.97",
-    "solid-js": "^1.9.11"
+    "@opentui/core": "0.2.7",
+    "@opentui/solid": "0.2.7",
+    "solid-js": "1.9.12"
   },
   "main": "opencode-plugins/ttc-message-transform.js",
   "devDependencies": {},

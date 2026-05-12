@@ -835,6 +835,7 @@ async function compressText(text, config, fetchImpl) {
         method: "POST",
         headers,
         body,
+        redirect: "error",
         signal: controller.signal
       });
 
