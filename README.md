@@ -4,6 +4,8 @@ OpenCode message transform plugin with [The Token Company](https://thetokencompa
 
 The Token Company (YC W26) builds models that process tokens based on context and semantic intent. With this plugin, you can remove context bloat from your prompts to Opencode before they hit the LLM provider.
 
+Modern OpenCode builds also load a TTC sidebar widget. Compression still runs in the server plugin; the sidebar reads redacted per-session metrics from local state and never stores prompt text, compressed text, request bodies, or API keys.
+
 [![npm version](https://img.shields.io/npm/v/@drfok/opencode-ttc-plugin.svg)](https://www.npmjs.com/package/@drfok/opencode-ttc-plugin)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](./LICENSE)
 [![X (Twitter)](https://img.shields.io/badge/X-%40drf0k-111111.svg)](https://x.com/drf0k)
@@ -25,6 +27,12 @@ Install the @drfok/opencode-ttc-plugin and install the plugin by following: http
 
 ```bash
 npm install -g @drfok/opencode-ttc-plugin
+opencode plugin @drfok/opencode-ttc-plugin --global
+```
+
+If you are on an older OpenCode build without package plugin target support, use the legacy file installer:
+
+```bash
 opencode-ttc-plugin install
 ```
 
@@ -44,6 +52,8 @@ opencode auth login
 ```bash
 opencode-ttc-plugin doctor --verbose
 ```
+
+5. Restart OpenCode. In a session, the sidebar should include `TTC Compression` with the latest message and session savings. Toasts remain as a fallback/configurable summary path.
 
 <details>
 <summary>For LLMs</summary>
@@ -65,7 +75,7 @@ Finally, tell the user to
 3. Enter their TTC API key (obtain from https://thetokencompany.com/)
 4. Verify by running `opencode-ttc-plugin doctor --verbose`
 
-5. Tell them to restart their OpenCode, and to watch for the toast when they start a session
+5. Tell them to restart OpenCode and watch the sidebar when they start a session
 </details>
 
 ## 2) Configure compression aggressiveness
@@ -115,7 +125,7 @@ Runtime resolution order for aggressiveness:
 | --- | --- |
 | `opencode-ttc-plugin install` | Installs plugin file into `~/.config/opencode/plugins` |
 | `opencode-ttc-plugin doctor` | Runs setup/auth checks |
-| `opencode-ttc-plugin doctor --verbose` | Shows effective config sources and resolution order |
+| `opencode-ttc-plugin doctor --verbose` | Shows effective config sources, TUI entrypoint status, and sidebar state path |
 | `opencode-ttc-plugin uninstall` | Removes installed plugin file |
 | `opencode-ttc-plugin config get` | Prints plugin config and effective aggressiveness |
 | `opencode-ttc-plugin config set level <low\|balanced\|high\|max>` | Sets named aggressiveness level |
@@ -140,8 +150,8 @@ Use CLI config for normal setup. Env vars are advanced overrides.
 | `compressHistory` | `false` | Also compresses older eligible `user` history messages (not just latest user turn) | `opencode-ttc-plugin config set compress-history false` |
 | `debug` | `false` | Emits extra plugin debug logs | `opencode-ttc-plugin config set debug false` |
 | `cacheMaxEntries` | `1000` | Max in-memory dedupe cache entries | `opencode-ttc-plugin config set cache-max-entries 1000` |
-| `toastOnActive` | `true` | Shows one activation toast per session | `opencode-ttc-plugin config set toast-on-active true` |
-| `toastOnIdleSummary` | `true` | Shows idle summary toast with savings stats | `opencode-ttc-plugin config set toast-on-idle-summary true` |
+| `toastOnActive` | `false` | Shows one activation toast per session when enabled; sidebar is the primary UI | `opencode-ttc-plugin config set toast-on-active true` |
+| `toastOnIdleSummary` | `false` | Shows idle summary toast with savings stats when enabled; sidebar is the primary UI | `opencode-ttc-plugin config set toast-on-idle-summary true` |
 
 Notes on scope:
 - TTC API parameters used directly by this plugin request are primarily `model` and `compression_settings.aggressiveness`.
@@ -157,4 +167,6 @@ Advanced overrides (optional):
 
 - Compression egress is pinned to `https://api.thetokencompany.com`.
 - Custom/invalid `TTC_BASE_URL` is ignored and safely falls back to pinned host.
+- Sidebar state is written under `${XDG_STATE_HOME:-~/.local/state}/opencode/ttc-plugin` with hashed session filenames.
+- Sidebar state contains aggregate counts and token/character savings only; it does not persist prompts, compressed output, request bodies, or API keys.
 - If your firewall prompts about outbound socket traffic, that is expected on first compression request.

@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,8 +35,8 @@ const DEFAULT_BEHAVIOR_SETTINGS = {
   compressHistory: false,
   debug: false,
   cacheMaxEntries: 1000,
-  toastOnActive: true,
-  toastOnIdleSummary: true
+  toastOnActive: false,
+  toastOnIdleSummary: false
 };
 
 const BEHAVIOR_ENV_KEYS = {
@@ -50,6 +58,8 @@ const BEHAVIOR_ENV_KEYS = {
 const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(currentFile), "..");
 const sourcePluginPath = resolve(repoRoot, "opencode-plugins", PLUGIN_FILENAME);
+const packageJsonPath = resolve(repoRoot, "package.json");
+const tuiEntrypointPath = resolve(repoRoot, "tui", "index.tsx");
 const pluginsDir = resolve(homedir(), ".config", "opencode", "plugins");
 const installedPluginPath = resolve(pluginsDir, PLUGIN_FILENAME);
 
@@ -63,6 +73,33 @@ function getPluginConfigPath() {
   const xdgConfigHome = String(process.env.XDG_CONFIG_HOME ?? "").trim();
   const configHome = xdgConfigHome || resolve(homedir(), ".config");
   return resolve(configHome, "opencode", "ttc-plugin.json");
+}
+
+function getSidebarStateDir() {
+  const xdgStateHome = String(process.env.XDG_STATE_HOME ?? "").trim();
+  const stateHome = xdgStateHome || resolve(homedir(), ".local", "state");
+  return resolve(stateHome, "opencode", "ttc-plugin");
+}
+
+function readPackageJson() {
+  try {
+    return JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function hasPluginTarget(packageJson, target) {
+  return Array.isArray(packageJson?.["oc-plugin"]) && packageJson["oc-plugin"].some((entry) => {
+    if (entry === target) return true;
+    return Array.isArray(entry) && entry[0] === target;
+  });
+}
+
+function checkStateDirWritable() {
+  const stateDir = getSidebarStateDir();
+  const status = existsSync(stateDir) ? "exists" : "created at runtime";
+  return { ok: true, path: `${stateDir} (${status})` };
 }
 
 function normalizeCompressionLevel(level) {
@@ -257,6 +294,8 @@ function install() {
 function doctor(options = { verbose: false }) {
   const authStore = hasAuthStoreKey();
   const { path: configPath, settings } = readPluginSettings();
+  const packageJson = readPackageJson();
+  const stateDir = checkStateDirWritable();
   const compression = resolveCompressionFromSources(settings);
   const behavior = resolveBehaviorFromSources(settings);
   const envHasKey = Boolean(process.env.TTC_API_KEY);
@@ -264,8 +303,15 @@ function doctor(options = { verbose: false }) {
   const hasUsableAuth = authSource !== "missing";
   const checks = [
     { label: "source plugin", ok: existsSync(sourcePluginPath), value: sourcePluginPath },
+    { label: "TUI entrypoint", ok: existsSync(tuiEntrypointPath), value: tuiEntrypointPath },
+    {
+      label: "OpenCode plugin targets",
+      ok: hasPluginTarget(packageJson, "server") && hasPluginTarget(packageJson, "tui"),
+      value: JSON.stringify(packageJson["oc-plugin"] ?? [])
+    },
     { label: "plugins dir", ok: existsSync(pluginsDir), value: pluginsDir },
     { label: "installed plugin", ok: existsSync(installedPluginPath), value: installedPluginPath },
+    { label: "sidebar state dir", ok: stateDir.ok, value: stateDir.path },
     { label: "TTC_API_KEY env (optional override)", ok: true, value: envHasKey ? "set" : "missing" },
     {
       label: `auth store (${AUTH_PROVIDER_ID})`,
