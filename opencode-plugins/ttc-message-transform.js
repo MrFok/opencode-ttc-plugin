@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 const AUTH_PROVIDER_ID = "the-token-company-plugin";
@@ -29,8 +29,8 @@ const DEFAULT_CONFIG = {
   compressHistory: false,
   debug: false,
   cacheMaxEntries: 1000,
-  toastOnActive: true,
-  toastOnIdleSummary: true
+  toastOnActive: false,
+  toastOnIdleSummary: false
 };
 
 const SKIP_PATTERNS = [
@@ -200,7 +200,15 @@ function createSessionStats() {
     exactTokensSaved: 0,
     activationToastShown: false,
     version: 0,
-    lastSummaryVersion: 0
+    lastSummaryVersion: 0,
+    lastMessageCharsBefore: 0,
+    lastMessageCharsAfter: 0,
+    lastMessageTokensSaved: 0,
+    lastMessagePartsProcessed: 0,
+    lastMessageCompressed: false,
+    lastMessageNoReduction: false,
+    lastMessageFallback: false,
+    lastMessageSkipReasons: {}
   };
 }
 
@@ -243,6 +251,22 @@ function resolveSessionIDFromEvent(event) {
   return properties.sessionID ?? properties.sessionId ?? properties.info?.id ?? properties.id ?? "";
 }
 
+function resolveSessionIDFromTransformInput(input) {
+  const properties = input?.properties ?? {};
+  return input?.sessionID
+    ?? input?.sessionId
+    ?? input?.session_id
+    ?? input?.session?.id
+    ?? input?.info?.sessionID
+    ?? input?.info?.sessionId
+    ?? properties.sessionID
+    ?? properties.sessionId
+    ?? properties.session_id
+    ?? properties.info?.id
+    ?? properties.id
+    ?? "";
+}
+
 async function maybeShowActivationToast(client, config, stats) {
   if (!config.toastOnActive || !stats || stats.activationToastShown) return;
   stats.activationToastShown = true;
@@ -253,6 +277,23 @@ function recordSkip(stats) {
   if (!stats) return;
   stats.skipped += 1;
   updateStatsVersion(stats);
+}
+
+function resetLastMessageStats(stats) {
+  if (!stats) return;
+  stats.lastMessageCharsBefore = 0;
+  stats.lastMessageCharsAfter = 0;
+  stats.lastMessageTokensSaved = 0;
+  stats.lastMessagePartsProcessed = 0;
+  stats.lastMessageCompressed = false;
+  stats.lastMessageNoReduction = false;
+  stats.lastMessageFallback = false;
+  stats.lastMessageSkipReasons = {};
+}
+
+function recordSkipReason(stats, reason) {
+  if (!stats || !reason) return;
+  stats.lastMessageSkipReasons[reason] = (stats.lastMessageSkipReasons[reason] ?? 0) + 1;
 }
 
 function recordProcessedPart(stats, { charsBefore, charsAfter, compressed, fallback, cacheHit, tokenSavingsExact }) {
@@ -271,7 +312,98 @@ function recordProcessedPart(stats, { charsBefore, charsAfter, compressed, fallb
     stats.exactTokensSaved += tokenSavingsExact;
   }
 
+  stats.lastMessageCharsBefore += charsBefore;
+  stats.lastMessageCharsAfter += charsAfter;
+  stats.lastMessagePartsProcessed += 1;
+  stats.lastMessageTokensSaved += Number.isFinite(tokenSavingsExact) && tokenSavingsExact > 0
+    ? tokenSavingsExact
+    : estimateTokensFromChars(charsSaved);
+  if (compressed) stats.lastMessageCompressed = true;
+  if (fallback) stats.lastMessageFallback = true;
+
   updateStatsVersion(stats);
+}
+
+function buildSidebarState({ stats, config, sessionID, authSource = "unknown" }) {
+  const charsSaved = Math.max(0, stats.charsBefore - stats.charsAfter);
+  const lastCharsSaved = Math.max(0, stats.lastMessageCharsBefore - stats.lastMessageCharsAfter);
+  const exactTokens = stats.exactTokensSaved > 0;
+  const lastSkipped = Object.values(stats.lastMessageSkipReasons).some((count) => count > 0);
+  const status = !config.enabled
+    ? "disabled"
+    : !config.apiKey
+      ? "missing_auth"
+      : stats.lastMessageFallback
+        ? "fallback"
+        : stats.lastMessageCompressed
+          ? "compressed"
+          : stats.lastMessageNoReduction
+            ? "no_reduction"
+            : lastSkipped
+              ? "skipped"
+              : "waiting";
+
+  return {
+    schemaVersion: 1,
+    sessionIDHash: createHash("sha256").update(String(sessionID ?? "")).digest("hex"),
+    updatedAt: new Date().toISOString(),
+    status,
+    config: {
+      enabled: Boolean(config.enabled),
+      hasApiKey: Boolean(config.apiKey),
+      authSource,
+      model: config.model,
+      aggressiveness: config.aggressiveness
+    },
+    session: {
+      processed: stats.processed,
+      compressed: stats.compressed,
+      skipped: stats.skipped,
+      fallback: stats.fallback,
+      cacheHits: stats.cacheHits,
+      charsBefore: stats.charsBefore,
+      charsAfter: stats.charsAfter,
+      charsSaved,
+      estimatedTokensSaved: stats.estimatedTokensSaved,
+      exactTokensSaved: stats.exactTokensSaved,
+      tokenMode: exactTokens ? "exact" : "estimated"
+    },
+    lastMessage: {
+      charsBefore: stats.lastMessageCharsBefore,
+      charsAfter: stats.lastMessageCharsAfter,
+      charsSaved: lastCharsSaved,
+      tokensSaved: stats.lastMessageTokensSaved,
+      partsProcessed: stats.lastMessagePartsProcessed,
+      compressed: stats.lastMessageCompressed,
+      noReduction: stats.lastMessageNoReduction,
+      fallback: stats.lastMessageFallback,
+      skipReasons: { ...stats.lastMessageSkipReasons }
+    }
+  };
+}
+
+async function writeSidebarState({
+  stats,
+  config,
+  sessionID,
+  authSource = "unknown",
+  statePath = getSidebarStatePath(sessionID),
+  writeFileImpl = writeFile,
+  renameImpl = rename,
+  mkdirImpl = mkdir,
+  rmImpl = rm
+}) {
+  if (!stats || !sessionID) return;
+  const state = buildSidebarState({ stats, config, sessionID, authSource });
+  const tempPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
+
+  try {
+    await mkdirImpl(dirname(statePath), { recursive: true });
+    await writeFileImpl(tempPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    await renameImpl(tempPath, statePath);
+  } catch {
+    await rmImpl(tempPath, { force: true }).catch(() => {});
+  }
 }
 
 function buildTtcPluginConfig(env = process.env) {
@@ -312,6 +444,17 @@ function getPluginConfigPath(env = process.env) {
   return join(configHome, "opencode", "ttc-plugin.json");
 }
 
+function getSidebarStateDir(env = process.env) {
+  const xdgStateHome = String(env.XDG_STATE_HOME ?? "").trim();
+  const stateHome = xdgStateHome || join(homedir(), ".local", "state");
+  return join(stateHome, "opencode", "ttc-plugin");
+}
+
+function getSidebarStatePath(sessionID, env = process.env) {
+  const sessionHash = createHash("sha256").update(String(sessionID ?? "")).digest("hex").slice(0, 32);
+  return join(getSidebarStateDir(env), `${sessionHash}.json`);
+}
+
 async function resolvePluginSettings({
   settingsFilePath = getPluginConfigPath(),
   readFileImpl = readFile
@@ -324,6 +467,47 @@ async function resolvePluginSettings({
   } catch {
     return {};
   }
+}
+
+async function resolveRuntimeConfig({
+  env = process.env,
+  settingsFilePath = getPluginConfigPath(env),
+  authFilePath = getAuthStorePath(env),
+  readFileImpl = readFile
+} = {}) {
+  const config = buildTtcPluginConfig(env);
+  const pluginSettings = await resolvePluginSettings({
+    settingsFilePath,
+    readFileImpl
+  });
+  const behaviorResolution = resolveBehaviorConfig({
+    env,
+    settings: pluginSettings
+  });
+  Object.assign(config, behaviorResolution.values);
+
+  const compressionResolution = resolveCompressionConfig({
+    env,
+    settings: pluginSettings,
+    defaultAggressiveness: config.aggressiveness
+  });
+  config.aggressiveness = compressionResolution.aggressiveness;
+
+  const authStoreApiKey = await resolveApiKeyFromAuthStore({
+    providerID: AUTH_PROVIDER_ID,
+    authFilePath,
+    readFileImpl
+  });
+  const apiKeyResolution = resolveEffectiveApiKey(config.apiKey, authStoreApiKey);
+  config.apiKey = apiKeyResolution.apiKey;
+
+  return {
+    config,
+    pluginSettings,
+    behaviorResolution,
+    compressionResolution,
+    apiKeyResolution
+  };
 }
 
 function resolveCompressionConfig({
@@ -651,6 +835,7 @@ async function compressText(text, config, fetchImpl) {
         method: "POST",
         headers,
         body,
+        redirect: "error",
         signal: controller.signal
       });
 
@@ -744,24 +929,45 @@ function setCached(cache, key, value, maxEntries) {
 }
 
 async function transformMessagesWithTtc({
+  input = null,
   output,
   client,
   config,
   cache,
   sessionStats = null,
+  authSource = "unknown",
+  writeSidebarStateImpl = writeSidebarState,
   fetchImpl = fetch
 }) {
   if (!output || !Array.isArray(output.messages)) return;
-  if (!config.enabled || !config.apiKey) return;
 
+  const currentSessionID = resolveSessionIDFromTransformInput(input);
   const latestUser = [...output.messages].reverse().find((entry) => getRole(entry?.info) === "user");
   const latestUserMessageID = latestUser?.info?.id;
+  const latestUserSessionID = latestUser?.info?.sessionID ?? currentSessionID;
+  if (!config.enabled || !config.apiKey) {
+    const stats = getSessionStats(sessionStats, latestUserSessionID);
+    await writeSidebarStateImpl({
+      stats,
+      config,
+      sessionID: latestUserSessionID,
+      authSource
+    });
+    return;
+  }
+
+  const resetSessions = new Set();
 
   for (const messageEntry of output.messages) {
     if (!messageEntry || !messageEntry.info || !Array.isArray(messageEntry.parts)) continue;
     if (!shouldCompressMessage(messageEntry.info, latestUserMessageID, config)) continue;
 
-    const stats = getSessionStats(sessionStats, messageEntry.info.sessionID);
+    const sessionID = messageEntry.info.sessionID ?? currentSessionID;
+    const stats = getSessionStats(sessionStats, sessionID);
+    if (stats && !resetSessions.has(sessionID)) {
+      resetSessions.add(sessionID);
+      resetLastMessageStats(stats);
+    }
 
     for (const part of messageEntry.parts) {
       if (!isTextPart(part)) continue;
@@ -770,7 +976,7 @@ async function transformMessagesWithTtc({
       if (skipReason) {
         if (config.debug) {
           await logEvent(client, "debug", "ttc.plugin.skip", {
-            session_id: messageEntry.info.sessionID,
+            session_id: sessionID,
             message_id: messageEntry.info.id,
             part_id: part.id,
             reason_code: skipReason,
@@ -778,11 +984,12 @@ async function transformMessagesWithTtc({
           });
         }
         recordSkip(stats);
+        recordSkipReason(stats, skipReason);
         continue;
       }
 
       const key = cacheKey({
-        sessionID: messageEntry.info.sessionID,
+        sessionID,
         messageID: messageEntry.info.id,
         partID: part.id,
         text: part.text,
@@ -803,7 +1010,7 @@ async function transformMessagesWithTtc({
           tokenSavingsExact: cached.tokenSavingsExact ?? null
         });
         await logEvent(client, "info", "ttc.plugin.response", {
-          session_id: messageEntry.info.sessionID,
+          session_id: sessionID,
           message_id: messageEntry.info.id,
           part_id: part.id,
           chars_before: originalChars,
@@ -818,7 +1025,7 @@ async function transformMessagesWithTtc({
       }
 
       await logEvent(client, "info", "ttc.plugin.request", {
-        session_id: messageEntry.info.sessionID,
+        session_id: sessionID,
         message_id: messageEntry.info.id,
         part_id: part.id,
         chars_before: part.text.length
@@ -839,9 +1046,12 @@ async function transformMessagesWithTtc({
         cacheHit: false,
         tokenSavingsExact: result.tokenSavingsExact ?? null
       });
+      if (!result.fallback && !result.changed && result.reason === "no_size_reduction" && stats) {
+        stats.lastMessageNoReduction = true;
+      }
 
       await logEvent(client, result.fallback ? "warn" : "info", result.fallback ? "ttc.plugin.fallback" : "ttc.plugin.response", {
-        session_id: messageEntry.info.sessionID,
+        session_id: sessionID,
         message_id: messageEntry.info.id,
         part_id: part.id,
         chars_before: originalChars,
@@ -865,59 +1075,57 @@ async function transformMessagesWithTtc({
 
       part.text = result.text;
     }
+
+    await writeSidebarStateImpl({
+      stats,
+      config,
+      sessionID,
+      authSource
+    });
   }
 }
 
 const TtcMessageTransformPlugin = async ({ client }) => {
-  const config = buildTtcPluginConfig();
-  const pluginSettings = await resolvePluginSettings();
-  const behaviorResolution = resolveBehaviorConfig({
-    env: process.env,
-    settings: pluginSettings
-  });
-  Object.assign(config, behaviorResolution.values);
-  const compressionResolution = resolveCompressionConfig({
-    env: process.env,
-    settings: pluginSettings,
-    defaultAggressiveness: config.aggressiveness
-  });
-  config.aggressiveness = compressionResolution.aggressiveness;
-  const authStoreApiKey = await resolveApiKeyFromAuthStore({ providerID: AUTH_PROVIDER_ID });
-  const apiKeyResolution = resolveEffectiveApiKey(config.apiKey, authStoreApiKey);
-  config.apiKey = apiKeyResolution.apiKey;
+  const initialRuntime = await resolveRuntimeConfig();
+  const {
+    config: initialConfig,
+    behaviorResolution: initialBehaviorResolution,
+    compressionResolution: initialCompressionResolution,
+    apiKeyResolution: initialApiKeyResolution
+  } = initialRuntime;
   const cache = new Map();
   const sessionStats = new Map();
 
-  if (config.baseUrlRejected) {
+  if (initialConfig.baseUrlRejected) {
     await logEvent(client, "warn", "ttc.plugin.config_invalid", {
       field: "TTC_BASE_URL",
-      provided: config.baseUrlProvidedSummary,
-      reason_code: config.baseUrlRejectReason,
+      provided: initialConfig.baseUrlProvidedSummary,
+      reason_code: initialConfig.baseUrlRejectReason,
       using: LOCKED_BASE_URL
     });
   }
 
   await logEvent(client, "info", "ttc.plugin.init", {
-    enabled: config.enabled,
-    has_api_key: Boolean(config.apiKey),
+    enabled: initialConfig.enabled,
+    has_api_key: Boolean(initialConfig.apiKey),
     auth_provider_id: AUTH_PROVIDER_ID,
-    auth_source: apiKeyResolution.source,
-    base_url_source: config.baseUrlSource,
-    behavior_sources: behaviorResolution.sources,
-    compression_source: compressionResolution.source,
-    compression_level: compressionResolution.level || "custom",
-    base_url: config.baseUrl,
-    model: config.model,
-    aggressiveness: config.aggressiveness,
-    min_chars: config.minChars,
-    timeout_ms: config.timeoutMs,
-    max_retries: config.maxRetries,
-    use_gzip: config.useGzip,
-    compress_system: config.compressSystem,
-    compress_history: config.compressHistory,
-    cache_max_entries: config.cacheMaxEntries,
-    toast_on_active: config.toastOnActive,
-    toast_on_idle_summary: config.toastOnIdleSummary
+    auth_source: initialApiKeyResolution.source,
+    base_url_source: initialConfig.baseUrlSource,
+    behavior_sources: initialBehaviorResolution.sources,
+    compression_source: initialCompressionResolution.source,
+    compression_level: initialCompressionResolution.level || "custom",
+    base_url: initialConfig.baseUrl,
+    model: initialConfig.model,
+    aggressiveness: initialConfig.aggressiveness,
+    min_chars: initialConfig.minChars,
+    timeout_ms: initialConfig.timeoutMs,
+    max_retries: initialConfig.maxRetries,
+    use_gzip: initialConfig.useGzip,
+    compress_system: initialConfig.compressSystem,
+    compress_history: initialConfig.compressHistory,
+    cache_max_entries: initialConfig.cacheMaxEntries,
+    toast_on_active: initialConfig.toastOnActive,
+    toast_on_idle_summary: initialConfig.toastOnIdleSummary
   });
 
   return {
@@ -943,9 +1151,18 @@ const TtcMessageTransformPlugin = async ({ client }) => {
         }
       ]
     },
-    "experimental.chat.messages.transform": async (_input, output) => {
+    "experimental.chat.messages.transform": async (input, output) => {
       try {
-        await transformMessagesWithTtc({ output, client, config, cache, sessionStats });
+        const runtime = await resolveRuntimeConfig();
+        await transformMessagesWithTtc({
+          input,
+          output,
+          client,
+          config: runtime.config,
+          cache,
+          sessionStats,
+          authSource: runtime.apiKeyResolution.source
+        });
       } catch {
         await logEvent(client, "warn", "ttc.plugin.fallback", {
           reason_code: "plugin_transform_failed"
@@ -953,8 +1170,9 @@ const TtcMessageTransformPlugin = async ({ client }) => {
       }
     },
     event: async ({ event }) => {
-      if (!config.toastOnIdleSummary) return;
       if (event?.type !== "session.idle") return;
+      const runtime = await resolveRuntimeConfig();
+      if (!runtime.config.toastOnIdleSummary) return;
 
       const sessionID = resolveSessionIDFromEvent(event);
       if (!sessionID) return;
@@ -977,12 +1195,22 @@ TtcMessageTransformPlugin._test = {
   buildTtcPluginConfig,
   getPluginConfigPath,
   resolvePluginSettings,
+  resolveRuntimeConfig,
   resolveCompressionConfig,
   resolveBehaviorConfig,
   resolveLockedBaseUrl,
   getAuthStorePath,
+  getSidebarStateDir,
+  getSidebarStatePath,
   resolveApiKeyFromAuthStore,
   resolveEffectiveApiKey,
+  resolveSessionIDFromTransformInput,
+  createSessionStats,
+  resetLastMessageStats,
+  recordSkipReason,
+  recordProcessedPart,
+  buildSidebarState,
+  writeSidebarState,
   getSkipReasonForText,
   transformMessagesWithTtc
 };
