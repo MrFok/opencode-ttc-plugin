@@ -165,8 +165,9 @@ Advanced overrides (optional):
 
 ## Security and network policy
 
-- Compression egress is pinned to `https://api.thetokencompany.com`.
+- Compression egress is pinned to `https://api.thetokencompany.com/v1/compress`.
 - Custom/invalid `TTC_BASE_URL` is ignored and safely falls back to pinned host.
+- Fetch redirects are rejected.
 - Sidebar state is written under `${XDG_STATE_HOME:-~/.local/state}/opencode/ttc-plugin` with hashed session filenames.
 - Sidebar state contains aggregate counts and token/character savings only; it does not persist prompts, compressed output, request bodies, or API keys.
 - If your firewall prompts about outbound socket traffic, that is expected on first compression request.
