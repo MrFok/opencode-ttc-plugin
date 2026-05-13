@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 node_modules/
+.opencode/
 dist/
 build/
 .DS_Store
