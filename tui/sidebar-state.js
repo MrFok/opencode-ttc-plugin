@@ -39,8 +39,14 @@ export function getAuthStorePath(env = process.env) {
 }
 
 export async function loadAuthStatus(options = {}) {
+  const env = options.env ?? process.env;
+  const envKey = String(env.TTC_API_KEY ?? "").trim();
+  if (envKey) {
+    return { hasKey: true, providerID: "env", authPath: "" };
+  }
+
   const readFileImpl = options.readFileImpl ?? readFile;
-  const authPath = options.authFilePath ?? getSharedAuthStorePath(options.env ?? process.env);
+  const authPath = options.authFilePath ?? getSharedAuthStorePath(env);
   try {
     const content = await readFileImpl(authPath, "utf8");
     const trimmed = String(content ?? "").trim();
