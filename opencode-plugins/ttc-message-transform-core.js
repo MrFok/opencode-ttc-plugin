@@ -62,6 +62,10 @@ export function createSessionStats(...args) {
   return testApi.createSessionStats(...args);
 }
 
+export function hydrateSessionStatsFromSidebarState(...args) {
+  return testApi.hydrateSessionStatsFromSidebarState(...args);
+}
+
 export function resetLastMessageStats(...args) {
   return testApi.resetLastMessageStats(...args);
 }

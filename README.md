@@ -261,6 +261,9 @@ That's expected — one is your LLM provider key, the other is the TTC key. They
 **Compression isn't firing**
 Check the sidebar status line. If it says `skipped: ...`, the message matched a [skip pattern](#7-what-gets-compressed) or was below `minChars`. Lower `minChars` (`config set min-chars 100`) or check that your message isn't mostly code/JSON.
 
+**Sidebar metrics reset after switching sessions or restarting OpenCode**
+Metrics are keyed by OpenCode session id and persisted under the hashed state path shown by `opencode-ttc-plugin doctor --verbose`. Switching sessions may show `new session` or `waiting for first compression` for sessions TTC has not processed yet, but returning to a processed session should restore its sidebar totals. After restarting OpenCode, the next compression in that session hydrates from the persisted state before writing new totals, so cumulative metrics should not reset.
+
 **Doctor says `auth store ... set under 'the-token-company-plugin'`**
 That's the legacy provider id from before v0.1.5. It still works — the plugin reads both. Your next `login` writes under the new `opencode-ttc-plugin` id and also clears the legacy entry; you can `logout` once to clear the legacy entry if you want a clean store.
 

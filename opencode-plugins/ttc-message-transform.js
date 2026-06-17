@@ -214,12 +214,63 @@ function createSessionStats() {
   };
 }
 
-function getSessionStats(sessionStats, sessionID) {
-  if (!sessionStats || !sessionID) return null;
-  if (!sessionStats.has(sessionID)) {
-    sessionStats.set(sessionID, createSessionStats());
+function hydrateSessionStatsFromSidebarState(state) {
+  if (!state || typeof state !== "object") return null;
+  if (state.schemaVersion !== 1) return null;
+
+  const numberOrZero = (value) => Math.max(0, Number(value) || 0);
+  const stats = createSessionStats();
+  const session = state.session && typeof state.session === "object" ? state.session : {};
+  const lastMessage = state.lastMessage && typeof state.lastMessage === "object" ? state.lastMessage : {};
+
+  stats.processed = numberOrZero(session.processed);
+  stats.compressed = numberOrZero(session.compressed);
+  stats.skipped = numberOrZero(session.skipped);
+  stats.fallback = numberOrZero(session.fallback);
+  stats.cacheHits = numberOrZero(session.cacheHits);
+  stats.charsBefore = numberOrZero(session.charsBefore);
+  stats.charsAfter = numberOrZero(session.charsAfter);
+  stats.estimatedTokensSaved = numberOrZero(session.estimatedTokensSaved);
+  stats.exactTokensSaved = numberOrZero(session.exactTokensSaved);
+  stats.lastMessageCharsBefore = numberOrZero(lastMessage.charsBefore);
+  stats.lastMessageCharsAfter = numberOrZero(lastMessage.charsAfter);
+  stats.lastMessageTokensSaved = numberOrZero(lastMessage.tokensSaved);
+  stats.lastMessagePartsProcessed = numberOrZero(lastMessage.partsProcessed);
+  stats.lastMessageCompressed = Boolean(lastMessage.compressed);
+  stats.lastMessageNoReduction = Boolean(lastMessage.noReduction);
+  stats.lastMessageFallback = Boolean(lastMessage.fallback);
+  stats.lastMessageSkipReasons = lastMessage.skipReasons && typeof lastMessage.skipReasons === "object"
+    ? Object.fromEntries(Object.entries(lastMessage.skipReasons).map(([reason, count]) => [reason, numberOrZero(count)]))
+    : {};
+  stats.version = stats.processed + stats.skipped + stats.fallback > 0 ? 1 : 0;
+
+  return stats;
+}
+
+async function loadPersistedSessionStats(sessionID, {
+  statePath = getSidebarStatePath(sessionID),
+  readFileImpl = readFile
+} = {}) {
+  try {
+    const content = await readFileImpl(statePath, "utf8");
+    return hydrateSessionStatsFromSidebarState(JSON.parse(content));
+  } catch {
+    return null;
   }
-  return sessionStats.get(sessionID);
+}
+
+async function getSessionStats(sessionStats, sessionID, options = {}) {
+  if (!sessionStats || !sessionID) return null;
+  const existing = sessionStats.get(sessionID);
+  if (existing) return await existing;
+
+  const pendingStats = loadPersistedSessionStats(sessionID, options).then((stats) => stats ?? createSessionStats());
+  sessionStats.set(sessionID, pendingStats);
+  const stats = await pendingStats;
+  if (sessionStats.get(sessionID) === pendingStats) {
+    sessionStats.set(sessionID, stats);
+  }
+  return stats;
 }
 
 function updateStatsVersion(stats) {
@@ -937,6 +988,8 @@ async function transformMessagesWithTtc({
   cache,
   sessionStats = null,
   authSource = "unknown",
+  readSidebarStateImpl = readFile,
+  env = process.env,
   writeSidebarStateImpl = writeSidebarState,
   fetchImpl = fetch
 }) {
@@ -947,12 +1000,17 @@ async function transformMessagesWithTtc({
   const latestUserMessageID = latestUser?.info?.id;
   const latestUserSessionID = latestUser?.info?.sessionID ?? currentSessionID;
   if (!config.enabled || !config.apiKey) {
-    const stats = getSessionStats(sessionStats, latestUserSessionID);
+    const statePath = getSidebarStatePath(latestUserSessionID, env);
+    const stats = await getSessionStats(sessionStats, latestUserSessionID, {
+      statePath,
+      readFileImpl: readSidebarStateImpl
+    });
     await writeSidebarStateImpl({
       stats,
       config,
       sessionID: latestUserSessionID,
-      authSource
+      authSource,
+      statePath
     });
     return;
   }
@@ -964,7 +1022,11 @@ async function transformMessagesWithTtc({
     if (!shouldCompressMessage(messageEntry.info, latestUserMessageID, config)) continue;
 
     const sessionID = messageEntry.info.sessionID ?? currentSessionID;
-    const stats = getSessionStats(sessionStats, sessionID);
+    const statePath = getSidebarStatePath(sessionID, env);
+    const stats = await getSessionStats(sessionStats, sessionID, {
+      statePath,
+      readFileImpl: readSidebarStateImpl
+    });
     if (stats && !resetSessions.has(sessionID)) {
       resetSessions.add(sessionID);
       resetLastMessageStats(stats);
@@ -1081,7 +1143,8 @@ async function transformMessagesWithTtc({
       stats,
       config,
       sessionID,
-      authSource
+      authSource,
+      statePath
     });
   }
 }
@@ -1209,6 +1272,7 @@ TtcMessageTransformPlugin._test = {
   resolveEffectiveApiKey,
   resolveSessionIDFromTransformInput,
   createSessionStats,
+  hydrateSessionStatsFromSidebarState,
   resetLastMessageStats,
   recordSkipReason,
   recordProcessedPart,

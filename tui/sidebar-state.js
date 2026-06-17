@@ -121,6 +121,15 @@ export function formatPartLine(session = {}) {
   return `${compressed}/${processed} parts compressed`;
 }
 
+export function shouldRenderSidebarState(state, loadedSessionID, currentSessionID) {
+  return Boolean(state && loadedSessionID && loadedSessionID === currentSessionID);
+}
+
+export function emptySidebarStateText({ loading = false, messageCount = 0 } = {}) {
+  if (loading) return "loading session metrics";
+  return messageCount > 0 ? "waiting for first compression" : "new session";
+}
+
 export function getStatusDotColor(status, theme = {}) {
   const successColor = theme.success ?? "green";
   const errorColor = theme.error ?? "red";

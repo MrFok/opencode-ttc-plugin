@@ -11,6 +11,7 @@ import {
   createSessionStats,
   getPluginConfigPath,
   getSidebarStatePath,
+  hydrateSessionStatsFromSidebarState,
   getAuthStorePath,
   getSkipReasonForText,
   recordProcessedPart,
@@ -31,8 +32,10 @@ import {
   formatMetricValue,
   formatPartLine,
   getStatusDotColor,
+  emptySidebarStateText,
   loadAuthStatus,
   loadSidebarState,
+  shouldRenderSidebarState,
   statusText
 } from "../tui/sidebar-state.js";
 import {
@@ -665,6 +668,125 @@ test("writes and loads sidebar state by hashed session path", async () => {
   }
 });
 
+test("hydrates session stats from persisted sidebar state before writing new resume metrics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-resume-state-"));
+
+  try {
+    const priorStats = createSessionStats();
+    recordProcessedPart(priorStats, {
+      charsBefore: 1000,
+      charsAfter: 400,
+      compressed: true,
+      fallback: false,
+      cacheHit: false,
+      tokenSavingsExact: 150
+    });
+
+    const statePath = getSidebarStatePath("sess-1", { XDG_STATE_HOME: tempDir });
+    await writeSidebarState({
+      stats: priorStats,
+      config: baseConfig,
+      sessionID: "sess-1",
+      statePath
+    });
+
+    const persisted = await loadSidebarState("sess-1", { statePath });
+    const hydrated = hydrateSessionStatsFromSidebarState(persisted);
+    assert.equal(hydrated.processed, 1);
+    assert.equal(hydrated.charsBefore, 1000);
+    assert.equal(hydrated.charsAfter, 400);
+    assert.equal(hydrated.exactTokensSaved, 150);
+
+    const output = createOutput("this resumed session prompt should add to the existing persisted metrics");
+    await transformMessagesWithTtc({
+      output,
+      client: createClient(),
+      config: baseConfig,
+      cache: new Map(),
+      sessionStats: new Map(),
+      env: { XDG_STATE_HOME: tempDir },
+      fetchImpl: async () => ({
+        ok: true,
+        async json() {
+          return {
+            output: "compressed after resume",
+            input_tokens: 200,
+            output_tokens: 80
+          };
+        }
+      })
+    });
+
+    const updated = await loadSidebarState("sess-1", { statePath });
+    assert.equal(updated.session.processed, 2);
+    assert.equal(updated.session.compressed, 2);
+    assert.equal(updated.session.charsBefore, 1000 + "this resumed session prompt should add to the existing persisted metrics".length);
+    assert.equal(updated.session.charsAfter, 400 + "compressed after resume".length);
+    assert.equal(updated.session.exactTokensSaved, 270);
+    assert.equal(updated.lastMessage.charsAfter, "compressed after resume".length);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent first-use hydration shares one persisted session stats object", async () => {
+  const priorStats = createSessionStats();
+  recordProcessedPart(priorStats, {
+    charsBefore: 1000,
+    charsAfter: 400,
+    compressed: true,
+    fallback: false,
+    cacheHit: false,
+    tokenSavingsExact: 150
+  });
+  const persistedState = JSON.stringify(buildSidebarState({
+    stats: priorStats,
+    config: baseConfig,
+    sessionID: "sess-1"
+  }));
+  const sessionStats = new Map();
+  const writes = [];
+  let readCalls = 0;
+  let releaseHydration;
+  const hydrationStarted = new Promise((resolve) => {
+    releaseHydration = resolve;
+  });
+
+  const makeTransform = (text, compressedText) => transformMessagesWithTtc({
+    output: createOutput(text),
+    client: createClient(),
+    config: baseConfig,
+    cache: new Map(),
+    sessionStats,
+    readSidebarStateImpl: async () => {
+      readCalls += 1;
+      await hydrationStarted;
+      return persistedState;
+    },
+    writeSidebarStateImpl: async ({ stats, config, sessionID, authSource }) => {
+      writes.push(buildSidebarState({ stats, config, sessionID, authSource }));
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          output: compressedText
+        };
+      }
+    })
+  });
+
+  const first = makeTransform("first resumed prompt should keep prior cumulative metrics", "first compressed");
+  const second = makeTransform("second resumed prompt should share hydrated metrics too", "second compressed");
+  releaseHydration();
+  await Promise.all([first, second]);
+
+  assert.equal(readCalls, 1);
+  assert.equal(writes.at(-1).session.processed, 3);
+  assert.equal(writes.at(-1).session.compressed, 3);
+  assert.equal(sessionStats.get("sess-1").processed, 3);
+});
+
 test("loadSidebarState returns null for malformed or missing state", async () => {
   const missing = await loadSidebarState("missing-session", {
     readFileImpl: async () => {
@@ -677,6 +799,17 @@ test("loadSidebarState returns null for malformed or missing state", async () =>
     readFileImpl: async () => "not-json"
   });
   assert.equal(malformed, null);
+});
+
+test("sidebar session switch helpers avoid rendering stale state as zeroed metrics", () => {
+  const currentState = { session: { processed: 2 } };
+
+  assert.equal(shouldRenderSidebarState(currentState, "session-a", "session-a"), true);
+  assert.equal(shouldRenderSidebarState(currentState, "session-a", "session-b"), false);
+  assert.equal(shouldRenderSidebarState(null, "session-a", "session-a"), false);
+  assert.equal(emptySidebarStateText({ loading: true, messageCount: 0 }), "loading session metrics");
+  assert.equal(emptySidebarStateText({ loading: false, messageCount: 0 }), "new session");
+  assert.equal(emptySidebarStateText({ loading: false, messageCount: 3 }), "waiting for first compression");
 });
 
 test("transform writes sidebar state after processing a session message", async () => {
