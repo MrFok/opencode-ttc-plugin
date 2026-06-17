@@ -274,9 +274,12 @@ const LOGIN_FAILURE_MESSAGES = {
 async function performLogin(api, dialog, keyValue) {
   const result = await writeAuthEntry({ apiKey: keyValue });
   if (result.ok) {
+    const legacyNote = result.removedLegacyIDs?.length
+      ? ` Also cleared stale legacy entries: ${result.removedLegacyIDs.join(", ")}.`
+      : "";
     toast(api, {
       variant: "success",
-      message: `TTC API key saved under '${result.providerID}'. Restart opencode (or send a message) to activate.`,
+      message: `TTC API key saved under '${result.providerID}'.${legacyNote} Restart opencode (or send a message) to activate.`,
       duration: 5000
     });
     await openTtcSettingsMenu(api, dialog);

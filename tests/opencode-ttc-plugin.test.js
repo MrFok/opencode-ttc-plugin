@@ -1140,6 +1140,55 @@ test("auth store write is atomic — concurrent writer does not lose entries", a
   }
 });
 
+test("login rotates away stale legacy TTC entries and leaves unrelated providers intact", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-rotate-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({
+      "the-token-company-plugin": { type: "api", key: "ttc_old_legacy" },
+      "opencode-ttc-plugin": { type: "api", key: "ttc_old_current" },
+      "anthropic": { type: "api", key: "sk-ant-keepMe" },
+      "openai": { type: "api", key: "sk-oai-keepMe" }
+    }, null, 2),
+    "utf8"
+  );
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_rotated",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.removedLegacyIDs, ["the-token-company-plugin"]);
+
+    const final = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(final["opencode-ttc-plugin"].key, "ttc_rotated");
+    assert.equal(final["the-token-company-plugin"], undefined, "legacy id should be cleared on rotation");
+    assert.equal(final["anthropic"].key, "sk-ant-keepMe", "unrelated providers must be preserved");
+    assert.equal(final["openai"].key, "sk-oai-keepMe", "unrelated providers must be preserved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("login with no legacy entry present reports empty removedLegacyIDs", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-fresh-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_brand_new",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.removedLegacyIDs, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("loadAuthStatus recognises legacy provider entries", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-authstatus-"));
   const authPath = join(tempDir, "opencode", "auth.json");

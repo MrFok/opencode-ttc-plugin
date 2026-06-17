@@ -347,6 +347,9 @@ async function persistKey(apiKey) {
     return;
   }
   console.log(`Saved TTC API key under '${result.providerID}' at ${result.authFilePath}`);
+  if (result.removedLegacyIDs?.length) {
+    console.log(`Removed stale legacy entries: ${result.removedLegacyIDs.join(", ")}`);
+  }
   console.log("Restart opencode for sessions to pick up the new key.");
 }
 
