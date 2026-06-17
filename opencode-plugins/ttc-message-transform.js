@@ -1206,20 +1206,7 @@ const TtcMessageTransformPlugin = async ({ client }) => {
       methods: [
         {
           type: "api",
-          label: "The Token Company (TTC) API key",
-          prompts: [
-            {
-              type: "text",
-              key: "apiKey",
-              message: "Enter TTC API key (from thetokencompany.com)",
-              placeholder: "ttc_..."
-            }
-          ],
-          async authorize(inputs = {}) {
-            const key = String(inputs.apiKey ?? "").trim();
-            if (!key) return { type: "failed" };
-            return { type: "success", key };
-          }
+          label: "The Token Company (TTC) API key"
         }
       ]
     },

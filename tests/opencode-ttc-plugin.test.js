@@ -1057,7 +1057,7 @@ test("registers TUI settings command and slash aliases", () => {
   assert.equal(typeof command.onSelect, "function");
 });
 
-test("registers only /ttc-logout (no custom ttc-login)", () => {
+test("registers /ttc-login and /ttc-logout slash commands", () => {
   let registeredCallback = null;
   registerTtcSettingsCommand({
     command: {
@@ -1073,7 +1073,9 @@ test("registers only /ttc-logout (no custom ttc-login)", () => {
   const login = commands.find((cmd) => cmd.value === "ttc.login");
   const logout = commands.find((cmd) => cmd.value === "ttc.logout");
 
-  assert.equal(Boolean(login), false);
+  assert.equal(Boolean(login), true);
+  assert.equal(login.slash.name, "ttc-login");
+  assert.equal(typeof login.onSelect, "function");
   assert.equal(Boolean(logout), true);
   assert.equal(logout.slash.name, "ttc-logout");
   assert.equal(typeof logout.onSelect, "function");
