@@ -1350,6 +1350,36 @@ test("loadAuthStatus recognises legacy provider entries", async () => {
   }
 });
 
+test("loadAuthStatus and hasAuthEntry treat TTC_API_KEY env as valid auth source", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-env-auth-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  // no key file present -> store reports no key
+
+  const envWithKey = { TTC_API_KEY: "ttc_env_key_123" };
+  const envNoKey = {};
+
+  try {
+    // env short-circuits regardless of store
+    const statusEnv = await loadAuthStatus({ env: envWithKey, authFilePath: authPath });
+    assert.equal(statusEnv.hasKey, true);
+    assert.equal(statusEnv.providerID, "env");
+
+    const statusNoEnv = await loadAuthStatus({ env: envNoKey, authFilePath: authPath });
+    assert.equal(statusNoEnv.hasKey, false);
+
+    // hasAuthEntry (TUI hasTtcAuthKey) also respects env
+    const hasEnv = await hasTtcAuthKey({ env: envWithKey, authFilePath: authPath });
+    assert.equal(hasEnv.hasKey, true);
+    assert.equal(hasEnv.providerID, "env");
+
+    const hasNoEnv = await hasTtcAuthKey({ env: envNoKey, authFilePath: authPath });
+    assert.equal(hasNoEnv.hasKey, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("known TTC model list is grounded in current docs", () => {
   const ids = TUI_KNOWN_MODELS.map((model) => model.id);
   assert.deepEqual(ids.sort(), ["bear-1.2", "bear-2"].sort());
