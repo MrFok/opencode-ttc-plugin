@@ -36,16 +36,29 @@ If you are on an older OpenCode build without package plugin target support, use
 opencode-ttc-plugin install
 ```
 
-2. Configure auth in OpenCode:
+2. Configure auth in OpenCode (any of these works):
 
 ```bash
+# Option A — plugin-managed login (writes to the opencode auth store, mode 0o600)
+opencode-ttc-plugin login                   # interactive prompt (no echo)
+printf '%s' "$TTC_API_KEY" | opencode-ttc-plugin login --stdin   # non-interactive / CI
+
+# Option B — from inside opencode (TUI)
+/ttc-login      # opens a dialog asking for the TTC API key
+/ttc-logout     # removes the TTC API key
+
+# Option C — through opencode's native auth flow
 opencode auth login
 ```
 
-3. In the auth flow choose:
-- provider: `the-token-company-plugin`
-- method: `Set TTC API Key`
+> The `login` command no longer accepts `--key <value>` inline — passing a secret on the command line leaks it via `ps aux` and shell history. Use `--stdin` for non-interactive flows, or the TTY prompt for interactive use.
+
+3. In the `opencode auth login` flow (Option C) choose:
+- provider: `opencode-ttc-plugin`
+- method: `The Token Company (TTC) API key`
 - paste key from `https://thetokencompany.com/`
+
+> Note: `opencode auth login` may also prompt for your LLM provider key (OpenAI/Anthropic/etc). That is a separate opencode auth — the TTC plugin only ever asks for one key (the TTC API key). Use `opencode-ttc-plugin login` or `/ttc-login` if you only want to set the TTC key without re-running the full opencode auth menu.
 
 4. Verify:
 
@@ -53,7 +66,7 @@ opencode auth login
 opencode-ttc-plugin doctor --verbose
 ```
 
-5. Restart OpenCode. In a session, the sidebar should include `Token Compression` with the latest message and session savings. Toasts remain as a fallback/configurable summary path.
+5. Restart OpenCode. In a session, the sidebar should include `Token Compression` with the latest message and session savings. The sidebar polls the opencode auth store directly, so once you log in it shows `authenticated — send a message to start compressing` without needing to send a message first. Toasts remain as a fallback/configurable summary path.
 
 <details>
 <summary>For LLMs</summary>
@@ -70,12 +83,14 @@ opencode-ttc-plugin install
 
 Finally, tell the user to 
 
-1. Run `opencode auth login`
-2. Search for `the-token-company-plugin`
-3. Enter their TTC API key (obtain from https://thetokencompany.com/)
-4. Verify by running `opencode-ttc-plugin doctor --verbose`
-
-5. Tell them to restart OpenCode and watch the sidebar when they start a session
+1. Set their TTC API key with one of:
+   - `printf '%s' "$KEY" \| opencode-ttc-plugin login --stdin` (CLI, recommended for scripts), or
+   - `opencode-ttc-plugin login` (CLI interactive prompt, no echo), or
+   - `/ttc-login` slash command inside opencode, or
+   - `opencode auth login` then choose provider `opencode-ttc-plugin`
+2. Get a key from https://thetokencompany.com/
+3. Verify by running `opencode-ttc-plugin doctor --verbose`
+4. Restart OpenCode and watch the sidebar when they start a session
 </details>
 
 ## 2) Configure compression aggressiveness
@@ -125,13 +140,36 @@ Runtime resolution order for aggressiveness:
 | --- | --- |
 | `opencode-ttc-plugin install` | Installs plugin file into `~/.config/opencode/plugins` |
 | `opencode-ttc-plugin doctor` | Runs setup/auth checks |
-| `opencode-ttc-plugin doctor --verbose` | Shows effective config sources, TUI entrypoint status, and sidebar state path |
+| `opencode-ttc-plugin doctor --verbose` | Shows effective config sources, TUI entrypoint status, known models, and sidebar state path |
 | `opencode-ttc-plugin uninstall` | Removes installed plugin file |
+| `opencode-ttc-plugin login [--stdin]` | Saves a TTC API key under the `opencode-ttc-plugin` provider in the opencode auth store. Without `--stdin`, prompts on the TTY with echo off. With `--stdin`, reads the key from stdin (use for CI: `printf '%s' "$KEY" \| opencode-ttc-plugin login --stdin`). The auth file is written atomically with mode `0o600`. |
+| `opencode-ttc-plugin logout` | Removes TTC auth entries (current and legacy) from the opencode auth store |
 | `opencode-ttc-plugin config get` | Prints plugin config and effective aggressiveness |
 | `opencode-ttc-plugin config set level <low\|balanced\|high\|max>` | Sets named aggressiveness level |
 | `opencode-ttc-plugin config set aggressiveness <0..1>` | Sets numeric aggressiveness |
 | `opencode-ttc-plugin config set <setting> <value>` | Sets behavior settings (see table below) |
 | `opencode-ttc-plugin config reset` | Removes plugin config file |
+
+The same login/logout actions are available inside OpenCode as slash commands: `/ttc-login`, `/ttc-logout`, and `/ttc` (full settings menu including a model picker).
+
+## Models
+
+The TTC compress endpoint accepts a `model` field. Per `https://thetokencompany.com/docs/compression`, the currently-listed models are:
+
+| Model | Status | Notes |
+| --- | --- | --- |
+| `bear-2` | Recommended | Most accurate compression. Best quality preservation. |
+| `bear-1.2` | Available | Faster compression. Lower latency per request. |
+
+This plugin's default is `bear-1.2` to preserve existing behavior; use `/ttc` → `Model` → `bear-2 (Recommended)` to switch. There is no TTC API endpoint for listing models at runtime, so the picker uses the curated list above plus a `custom model id` escape hatch for enterprise fine-tunes.
+
+If you ever see an unexpected model id in the sidebar (e.g. something like `bear-2.0` — note: `bear-2.0` is **not** a real model id), check `opencode-ttc-plugin doctor --verbose` for the effective `model` value and its source. The model displayed in the sidebar is exactly what the plugin sends to the API; it cannot change on its own. Common causes:
+
+- A `model` key left in `~/.config/opencode/ttc-plugin.json` from a previous `/ttc` selection
+- A `TTC_MODEL` environment variable exported in your shell
+- A model id typed manually through the old free-text prompt
+
+Reset to defaults with `opencode-ttc-plugin config reset`, then re-pick from the curated list via `/ttc`.
 
 ## Behavior settings
 
@@ -168,6 +206,9 @@ Advanced overrides (optional):
 - Compression egress is pinned to `https://api.thetokencompany.com/v1/compress`.
 - Custom/invalid `TTC_BASE_URL` is ignored and safely falls back to pinned host.
 - Fetch redirects are rejected.
+- The TTC API key is stored in the opencode auth store (`${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json`). All writes by this plugin are atomic (temp file + `rename(2)`), set file mode `0o600` and directory mode `0o700`, refuse to overwrite a corrupt existing file, and replace any symlink at the target path (so a planted symlink cannot exfiltrate the key to another location).
+- The CLI `login` command never accepts the key as a `--key <value>` argument (which would leak via `ps aux` and shell history). Use the TTY prompt (echo off) or `--stdin`.
+- A relative or non-absolute `XDG_DATA_HOME` is ignored and falls back to `$HOME/.local/share` to prevent the key being written to the working directory.
 - Sidebar state is written under `${XDG_STATE_HOME:-~/.local/state}/opencode/ttc-plugin` with hashed session filenames.
 - Sidebar state contains aggregate counts and token/character savings only; it does not persist prompts, compressed output, request bodies, or API keys.
 - If your firewall prompts about outbound socket traffic, that is expected on first compression request.
