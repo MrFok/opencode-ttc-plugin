@@ -1,9 +1,21 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  AUTH_PROVIDER_ID,
+  LEGACY_AUTH_PROVIDER_IDS,
+  getAuthStorePath,
+  hasAuthEntry,
+  writeAuthEntry,
+  removeAuthEntry
+} from "../lib/auth-store.js";
 
 export const TTC_SETTINGS_COMMAND_VALUE = "ttc.settings";
 export const TTC_SETTINGS_COMMAND_TITLE = "Token Compression: Settings";
+export const TTC_LOGIN_COMMAND_VALUE = "ttc.login";
+export const TTC_LOGIN_COMMAND_TITLE = "Token Compression: Login";
+export const TTC_LOGOUT_COMMAND_VALUE = "ttc.logout";
+export const TTC_LOGOUT_COMMAND_TITLE = "Token Compression: Logout";
 
 export const COMPRESSION_LEVELS = {
   low: 0.05,
@@ -11,6 +23,13 @@ export const COMPRESSION_LEVELS = {
   high: 0.2,
   max: 0.3
 };
+
+export { AUTH_PROVIDER_ID, LEGACY_AUTH_PROVIDER_IDS };
+
+export const KNOWN_MODELS = [
+  { id: "bear-2", label: "bear-2 (Recommended)", description: "Most accurate compression. Best quality preservation." },
+  { id: "bear-1.2", label: "bear-1.2", description: "Faster compression. Lower latency per request." }
+];
 
 const DEFAULT_SETTINGS = {
   enabled: true,
@@ -29,6 +48,13 @@ export function getTtcSettingsConfigPath(env = process.env) {
   const configHome = xdgConfigHome || join(homedir(), ".config");
   return join(configHome, "opencode", "ttc-plugin.json");
 }
+
+export {
+  getAuthStorePath,
+  hasAuthEntry as hasTtcAuthKey,
+  writeAuthEntry,
+  removeAuthEntry
+};
 
 export async function readTtcSettings({
   configPath = getTtcSettingsConfigPath(),
@@ -197,6 +223,111 @@ function selectLevel(api, dialog, current) {
   }));
 }
 
+function selectModel(api, dialog, currentValue) {
+  const knownIDs = KNOWN_MODELS.map((model) => model.id);
+  const options = KNOWN_MODELS.map((model) => ({
+    title: model.label,
+    value: model.id,
+    description: model.description
+  }));
+  const isCustom = currentValue && !knownIDs.includes(currentValue);
+  if (isCustom) {
+    options.push({
+      title: `Custom: ${currentValue}`,
+      value: currentValue,
+      description: "Currently set to a non-standard model id"
+    });
+  }
+  options.push({
+    title: "Enter custom model id",
+    value: "__custom__",
+    description: "Specify a model id (e.g. an enterprise fine-tune)"
+  });
+
+  dialog.replace(() => api.ui.DialogSelect({
+    title: "Compression Model",
+    current: currentValue,
+    options,
+    onSelect: (option) => {
+      if (option.value === "__custom__") {
+        promptValue(api, dialog, {
+          title: "Custom Model",
+          placeholder: "bear-1.2",
+          value: currentValue,
+          action: "set-model"
+        });
+        return;
+      }
+      void saveAndReturn(api, dialog, "set-model", option.value);
+    }
+  }));
+}
+
+const LOGIN_FAILURE_MESSAGES = {
+  empty_key: "Empty API key.",
+  auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
+  auth_store_not_regular_file: "opencode auth store path is not a regular file.",
+  auth_store_read_failed: "Could not read the opencode auth store.",
+  auth_store_write_failed: "Could not write the opencode auth store."
+};
+
+async function performLogin(api, dialog, keyValue) {
+  const result = await writeAuthEntry({ apiKey: keyValue });
+  if (result.ok) {
+    toast(api, {
+      variant: "success",
+      message: `TTC API key saved under '${result.providerID}'. Restart opencode (or send a message) to activate.`,
+      duration: 5000
+    });
+    await openTtcSettingsMenu(api, dialog);
+    return;
+  }
+  const message = LOGIN_FAILURE_MESSAGES[result.reason] ?? `Login failed: ${result.reason}.`;
+  toast(api, { variant: "error", message, duration: 5000 });
+  renderAlert(api, dialog, "Login Failed", message);
+}
+
+function promptLogin(api, dialog) {
+  dialog.replace(() => api.ui.DialogPrompt({
+    title: "TTC API Key",
+    placeholder: "ttc_...",
+    value: "",
+    onConfirm: (nextValue) => void performLogin(api, dialog, nextValue),
+    onCancel: () => openTtcSettingsMenu(api, dialog)
+  }));
+}
+
+const LOGOUT_FAILURE_MESSAGES = {
+  auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
+  auth_store_read_failed: "Could not read the opencode auth store.",
+  auth_store_write_failed: "Could not write the opencode auth store."
+};
+
+async function confirmLogout(api, dialog) {
+  dialog.replace(() => api.ui.DialogConfirm({
+    title: "Remove TTC API Key",
+    message: "Remove the TTC API key from the opencode auth store?",
+    onConfirm: async () => {
+      const result = await removeAuthEntry();
+      if (!result.ok) {
+        const message = LOGOUT_FAILURE_MESSAGES[result.reason] ?? `Logout failed: ${result.reason}.`;
+        toast(api, { variant: "error", message, duration: 5000 });
+        renderAlert(api, dialog, "Logout Failed", message);
+        return;
+      }
+      toast(api, {
+        variant: result.removedAny ? "success" : "info",
+        message: result.removedAny
+          ? "TTC API key removed. Restart opencode to fully clear active sessions."
+          : "No TTC auth entry was present.",
+        duration: 4500
+      });
+      await openTtcSettingsMenu(api, dialog);
+    },
+    onCancel: () => openTtcSettingsMenu(api, dialog)
+  }));
+}
+
 function confirmReset(api, dialog) {
   dialog.replace(() => api.ui.DialogConfirm({
     title: "Reset Token Compression Settings",
@@ -218,7 +349,19 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
   if (!api?.ui || !dialog?.replace) return;
 
   const settings = await readTtcSettings();
+  const auth = await hasAuthEntry();
   const view = buildSettingsView(settings);
+  const authOption = auth.hasKey
+    ? {
+        title: "Remove API key",
+        value: "ttc-logout",
+        description: "Revoke saved key"
+      }
+    : {
+        title: "Add API key",
+        value: "ttc-login",
+        description: "Required for compression"
+      };
   dialog.setSize?.("medium");
   dialog.replace(() => api.ui.DialogSelect({
     title: "Token Compression Settings",
@@ -248,6 +391,7 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
         value: "set-model",
         description: view.model
       },
+      authOption,
       {
         title: "Reset config",
         value: "reset-config",
@@ -282,12 +426,15 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
         return;
       }
       if (option.value === "set-model") {
-        promptValue(api, dialog, {
-          title: "Model",
-          placeholder: "bear-1.2",
-          value: view.model,
-          action: "set-model"
-        });
+        selectModel(api, dialog, view.model);
+        return;
+      }
+      if (option.value === "ttc-login") {
+        promptLogin(api, dialog);
+        return;
+      }
+      if (option.value === "ttc-logout") {
+        confirmLogout(api, dialog);
         return;
       }
       if (option.value === "reset-config") {
@@ -310,6 +457,26 @@ export function registerTtcSettingsCommand(api) {
         aliases: ["ttc"]
       },
       onSelect: (dialog) => void openTtcSettingsMenu(api, dialog ?? api.ui?.dialog)
+    },
+    {
+      title: TTC_LOGIN_COMMAND_TITLE,
+      value: TTC_LOGIN_COMMAND_VALUE,
+      description: "Set your TTC API key in the opencode auth store",
+      category: "Token Compression",
+      slash: {
+        name: "ttc-login"
+      },
+      onSelect: (dialog) => void promptLogin(api, dialog ?? api.ui?.dialog)
+    },
+    {
+      title: TTC_LOGOUT_COMMAND_TITLE,
+      value: TTC_LOGOUT_COMMAND_VALUE,
+      description: "Remove the TTC API key from the opencode auth store",
+      category: "Token Compression",
+      slash: {
+        name: "ttc-logout"
+      },
+      onSelect: (dialog) => void confirmLogout(api, dialog ?? api.ui?.dialog)
     }
   ]);
 }

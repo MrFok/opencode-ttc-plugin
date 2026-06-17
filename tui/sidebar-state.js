@@ -2,6 +2,14 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  AUTH_PROVIDER_ID,
+  LEGACY_AUTH_PROVIDER_IDS,
+  getAuthStorePath as getSharedAuthStorePath
+} from "../lib/auth-store.js";
+
+export { AUTH_PROVIDER_ID };
+export const SHARED_AUTH_PROVIDER_IDS = [AUTH_PROVIDER_ID, ...LEGACY_AUTH_PROVIDER_IDS];
 
 const SKIP_REASON_LABELS = {
   below_threshold: "below threshold",
@@ -24,6 +32,33 @@ export function getSidebarStateDir(env = process.env) {
 export function getSidebarStatePath(sessionID, env = process.env) {
   const sessionHash = createHash("sha256").update(String(sessionID ?? "")).digest("hex").slice(0, 32);
   return join(getSidebarStateDir(env), `${sessionHash}.json`);
+}
+
+export function getAuthStorePath(env = process.env) {
+  return getSharedAuthStorePath(env);
+}
+
+export async function loadAuthStatus(options = {}) {
+  const readFileImpl = options.readFileImpl ?? readFile;
+  const authPath = options.authFilePath ?? getSharedAuthStorePath(options.env ?? process.env);
+  try {
+    const content = await readFileImpl(authPath, "utf8");
+    const trimmed = String(content ?? "").trim();
+    if (!trimmed) return { hasKey: false, providerID: null, authPath };
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { hasKey: false, providerID: null, authPath };
+    }
+    for (const candidateID of SHARED_AUTH_PROVIDER_IDS) {
+      const auth = parsed[candidateID];
+      if (auth && auth.type === "api" && String(auth.key ?? "").trim()) {
+        return { hasKey: true, providerID: candidateID, authPath };
+      }
+    }
+    return { hasKey: false, providerID: null, authPath };
+  } catch {
+    return { hasKey: false, providerID: null, authPath };
+  }
 }
 
 export async function loadSidebarState(sessionID, options = {}) {

@@ -5,12 +5,14 @@ import {
   formatMetricValue,
   formatPartLine,
   getStatusDotColor,
+  loadAuthStatus,
   loadSidebarState,
   statusText
 } from "./sidebar-state.js";
 import { registerTtcSettingsCommand } from "./settings.js";
 
 type SidebarState = Awaited<ReturnType<typeof loadSidebarState>>;
+type AuthStatus = Awaited<ReturnType<typeof loadAuthStatus>>;
 
 function SidebarContent(props: {
   api: TuiPluginApi;
@@ -18,11 +20,13 @@ function SidebarContent(props: {
   theme: TuiTheme;
 }) {
   const [state, setState] = createSignal<SidebarState>(null);
+  const [authStatus, setAuthStatus] = createSignal<AuthStatus>({ hasKey: false, providerID: null, authPath: "" });
   const [refreshCount, setRefreshCount] = createSignal(0);
   const theme = () => props.theme.current;
 
   const refresh = async () => {
     setState(await loadSidebarState(props.sessionID));
+    setAuthStatus(await loadAuthStatus());
   };
 
   createEffect(() => {
@@ -52,9 +56,24 @@ function SidebarContent(props: {
     unsubscribeSessionStatus();
   });
 
-  const dotColor = createMemo(() => {
+  const effectiveStatus = createMemo(() => {
     const current = state();
-    return getStatusDotColor(current?.status, theme());
+    if (current?.status === "missing_auth" && authStatus().hasKey) {
+      return "waiting";
+    }
+    return current?.status;
+  });
+
+  const dotColor = createMemo(() => {
+    return getStatusDotColor(effectiveStatus(), theme());
+  });
+
+  const statusLine = createMemo(() => {
+    const current = state();
+    if (effectiveStatus() === "waiting") {
+      return "authenticated — send a message to start compressing";
+    }
+    return statusText(current);
   });
 
   return (
@@ -64,7 +83,7 @@ function SidebarContent(props: {
         <text fg={theme().text}>Token Compression </text>
         <text fg={theme().textMuted}>{state()?.config?.model ?? ""}</text>
       </box>
-      <text fg={theme().textMuted}>{statusText(state())}</text>
+      <text fg={theme().textMuted}>{statusLine()}</text>
       <Show when={state()} fallback={<text fg={theme().textMuted}>No session data yet</text>}>
         {(current) => (
           <box gap={0}>
