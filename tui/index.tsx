@@ -66,15 +66,23 @@ function SidebarContent(props: {
 
   const sessionMessageCount = createMemo(() => props.api.state.session.messages(props.sessionID)?.length ?? 0);
 
+  const hasAuth = createMemo(() => authStatus().hasKey);
+
   const visibleState = createMemo(() => {
+    if (!hasAuth()) {
+      return null; // hide any stale compressed/skipped state once logged out
+    }
     return shouldRenderSidebarState(state(), loadedSessionID(), props.sessionID) ? state() : null;
   });
 
   const isLoadingCurrentSession = createMemo(() => loadingSessionID() === props.sessionID && !visibleState());
 
   const effectiveStatus = createMemo(() => {
+    if (!hasAuth()) {
+      return "missing_auth";
+    }
     const current = visibleState();
-    if (current?.status === "missing_auth" && authStatus().hasKey) {
+    if (current?.status === "missing_auth" && hasAuth()) {
       return "waiting";
     }
     return current?.status;
@@ -87,6 +95,9 @@ function SidebarContent(props: {
   const statusLine = createMemo(() => {
     const current = visibleState();
     if (!current) {
+      if (!hasAuth()) {
+        return "missing TTC auth";
+      }
       return emptySidebarStateText({
         loading: isLoadingCurrentSession(),
         messageCount: sessionMessageCount()
