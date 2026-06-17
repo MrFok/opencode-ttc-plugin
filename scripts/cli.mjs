@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import readline from "node:readline";
+import { Writable } from "node:stream";
 import {
   AUTH_PROVIDER_ID,
   LEGACY_AUTH_PROVIDER_IDS,
@@ -290,34 +291,35 @@ function printUsage() {
 function promptSecret(query) {
   return new Promise((onResolve) => {
     const input = process.stdin;
-    const output = process.stdout;
-    const isTTY = Boolean(input.isTTY);
-    const originalIsRaw = isTTY && input.isRaw;
-    const rl = readline.createInterface({ input, output, terminal: isTTY });
-    const restore = () => {
-      try {
-        if (isTTY && typeof input.setRawMode === "function") {
-          input.setRawMode(Boolean(originalIsRaw));
-        }
-      } catch {
-        // ignore
-      }
-    };
-    if (isTTY && typeof input.setRawMode === "function") {
-      try { input.setRawMode(true); } catch { /* ignore */ }
-    }
-    rl.question(query, (answer) => {
-      restore();
-      rl.close();
-      output.write("\n");
-      onResolve(String(answer ?? "").replace(/\r?\n$/, ""));
-    });
-    rl.on("SIGINT", () => {
-      restore();
-      rl.close();
-      output.write("\n");
+    const realOutput = process.stdout;
+    if (!input.isTTY) {
       onResolve("");
+      return;
+    }
+    realOutput.write(query);
+    const mutedOutput = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      }
     });
+    const rl = readline.createInterface({
+      input,
+      output: mutedOutput,
+      terminal: true,
+      prompt: ""
+    });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try { rl.close(); } catch { /* ignore */ }
+      realOutput.write("\n");
+      onResolve(value);
+    };
+    rl.question("", (answer) => {
+      finish(String(answer ?? "").replace(/\r?\n$/, ""));
+    });
+    rl.on("SIGINT", () => finish(""));
   });
 }
 
