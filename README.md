@@ -262,7 +262,10 @@ That's expected — one is your LLM provider key, the other is the TTC key. They
 Check the sidebar status line. If it says `skipped: ...`, the message matched a [skip pattern](#7-what-gets-compressed) or was below `minChars`. Lower `minChars` (`config set min-chars 100`) or check that your message isn't mostly code/JSON.
 
 **Doctor says `auth store ... set under 'the-token-company-plugin'`**
-That's the legacy provider id from before v0.1.5. It still works — the plugin reads both. Your next `login` writes under the new `opencode-ttc-plugin` id; you can `logout` once to clear the legacy entry if you want a clean store.
+That's the legacy provider id from before v0.1.5. It still works — the plugin reads both. Your next `login` writes under the new `opencode-ttc-plugin` id and also clears the legacy entry; you can `logout` once to clear the legacy entry if you want a clean store.
+
+**A non-TTC provider key disappeared from `auth.json`**
+The auth store is written with atomic temp+rename (no partial files) but is not serialized across concurrent writers. If you ran `opencode-ttc-plugin login` at the exact moment `opencode auth login` was rotating another provider's key, the slower writer wins and the other's update can be dropped. Rare in practice (both are user-initiated, single-shot). Recovery: re-enter the dropped key via `opencode auth login`.
 
 ## 9) Security and network policy
 

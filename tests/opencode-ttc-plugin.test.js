@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 
 import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
@@ -532,6 +532,15 @@ test("plugin transform reloads config changes without recreating plugin factory"
 test("resolves auth store path from XDG_DATA_HOME", () => {
   const path = getAuthStorePath({ XDG_DATA_HOME: "/tmp/xdg-data" });
   assert.equal(path, "/tmp/xdg-data/opencode/auth.json");
+});
+
+test("auth store path falls back to $HOME when XDG_DATA_HOME is relative", () => {
+  const expected = join(homedir(), ".local", "share", "opencode", "auth.json");
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "relative/data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "./data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "" }), expected);
+  assert.equal(getAuthStorePath({}), expected);
 });
 
 test("resolves api key from OpenCode auth store for provider id", async () => {

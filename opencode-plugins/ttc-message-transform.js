@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { getAuthStorePath } from "../lib/auth-store.js";
 
 const AUTH_PROVIDER_ID = "opencode-ttc-plugin";
 const LEGACY_AUTH_PROVIDER_IDS = ["the-token-company-plugin"];
@@ -431,12 +432,6 @@ function buildTtcPluginConfig(env = process.env) {
     toastOnActive: parseBoolean(env.TTC_TOAST_ON_ACTIVE, DEFAULT_CONFIG.toastOnActive),
     toastOnIdleSummary: parseBoolean(env.TTC_TOAST_ON_IDLE_SUMMARY, DEFAULT_CONFIG.toastOnIdleSummary)
   };
-}
-
-function getAuthStorePath(env = process.env) {
-  const xdgDataHome = String(env.XDG_DATA_HOME ?? "").trim();
-  const dataHome = xdgDataHome || join(homedir(), ".local", "share");
-  return join(dataHome, "opencode", "auth.json");
 }
 
 function getPluginConfigPath(env = process.env) {
