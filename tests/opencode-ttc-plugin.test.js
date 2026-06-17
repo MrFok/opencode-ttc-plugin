@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
 import {
@@ -31,14 +31,21 @@ import {
   formatMetricValue,
   formatPartLine,
   getStatusDotColor,
+  loadAuthStatus,
   loadSidebarState,
   statusText
 } from "../tui/sidebar-state.js";
 import {
   getTtcSettingsConfigPath,
+  hasTtcAuthKey,
+  openTtcSettingsMenu,
   registerTtcSettingsCommand,
   resetTtcSettings,
-  updateTtcSetting
+  updateTtcSetting,
+  writeAuthEntry as writeTuiAuthEntry,
+  removeAuthEntry as removeTuiAuthEntry,
+  AUTH_PROVIDER_ID as TUI_AUTH_PROVIDER_ID,
+  KNOWN_MODELS as TUI_KNOWN_MODELS
 } from "../tui/settings.js";
 
 function createOutput(text) {
@@ -788,10 +795,32 @@ test("registers plugin auth provider for /connect flow", async () => {
   const client = createClient();
   const plugin = await TtcMessageTransformPlugin({ client });
 
-  assert.equal(plugin.auth.provider, "the-token-company-plugin");
+  assert.equal(plugin.auth.provider, "opencode-ttc-plugin");
   assert.equal(Array.isArray(plugin.auth.methods), true);
   assert.equal(plugin.auth.methods.length > 0, true);
   assert.equal(plugin.auth.methods[0].type, "api");
+});
+
+test("reads legacy auth store entries written under the old provider id", async () => {
+  const key = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": {
+        type: "api",
+        key: "legacy_key"
+      }
+    })
+  });
+  assert.equal(key, "legacy_key");
+});
+
+test("prefers new provider id when both legacy and current entries exist", async () => {
+  const key = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": { type: "api", key: "legacy_key" },
+      "opencode-ttc-plugin": { type: "api", key: "current_key" }
+    })
+  });
+  assert.equal(key, "current_key");
 });
 
 test("shows activation and idle summary toasts in TUI", async () => {
@@ -886,6 +915,80 @@ test("registers TUI settings command and slash aliases", () => {
   assert.equal(typeof command.onSelect, "function");
 });
 
+test("registers /ttc-login and /ttc-logout slash commands", () => {
+  let registeredCallback = null;
+  registerTtcSettingsCommand({
+    command: {
+      register(callback) {
+        registeredCallback = callback;
+        return () => {};
+      }
+    },
+    ui: { dialog: {}, toast() {} }
+  });
+
+  const commands = registeredCallback();
+  const login = commands.find((cmd) => cmd.value === "ttc.login");
+  const logout = commands.find((cmd) => cmd.value === "ttc.logout");
+
+  assert.equal(Boolean(login), true);
+  assert.equal(login.slash.name, "ttc-login");
+  assert.equal(typeof login.onSelect, "function");
+  assert.equal(Boolean(logout), true);
+  assert.equal(logout.slash.name, "ttc-logout");
+  assert.equal(typeof logout.onSelect, "function");
+});
+
+test("settings menu shows one compact auth row based on auth state", async () => {
+  const tempDataHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-data-"));
+  const tempConfigHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-config-"));
+  const originalEnv = {
+    XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME
+  };
+  process.env.XDG_DATA_HOME = tempDataHome;
+  process.env.XDG_CONFIG_HOME = tempConfigHome;
+
+  let latestSelect = null;
+  const api = {
+    ui: {
+      DialogSelect(input) {
+        latestSelect = input;
+        return input;
+      },
+      dialog: {
+        setSize() {},
+        replace(render) { render(); }
+      },
+      toast() {}
+    }
+  };
+
+  try {
+    await openTtcSettingsMenu(api, api.ui.dialog);
+    let authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].title, "Add API key");
+    assert.equal(authRows[0].description, "Required for compression");
+
+    await writeTuiAuthEntry({ apiKey: "ttc_existing_key" });
+    await openTtcSettingsMenu(api, api.ui.dialog);
+    authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].title, "Remove API key");
+    assert.equal(authRows[0].description, "Revoke saved key");
+  } finally {
+    if (originalEnv.XDG_DATA_HOME === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = originalEnv.XDG_DATA_HOME;
+
+    if (originalEnv.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalEnv.XDG_CONFIG_HOME;
+
+    await rm(tempDataHome, { recursive: true, force: true });
+    await rm(tempConfigHome, { recursive: true, force: true });
+  }
+});
+
 test("TUI settings path follows existing XDG config resolution", () => {
   const path = getTtcSettingsConfigPath({ XDG_CONFIG_HOME: "/tmp/xdg-config" });
   assert.equal(path, "/tmp/xdg-config/opencode/ttc-plugin.json");
@@ -950,4 +1053,114 @@ test("TUI settings helper rejects invalid values and resets config", async () =>
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("TUI auth helpers write/remove key under current provider id with secure file mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    const written = await writeTuiAuthEntry({
+      apiKey: "ttc_example_key",
+      authFilePath: authPath
+    });
+    assert.equal(written.ok, true);
+    assert.equal(written.providerID, "opencode-ttc-plugin");
+
+    const stored = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(stored["opencode-ttc-plugin"].type, "api");
+    assert.equal(stored["opencode-ttc-plugin"].key, "ttc_example_key");
+
+    const { statSync } = await import("node:fs");
+    const mode = statSync(authPath).mode & 0o777;
+    assert.equal(mode, 0o600, `auth file should be 0o600, got 0o${mode.toString(8)}`);
+
+    const hasAfter = await hasTtcAuthKey({ authFilePath: authPath });
+    assert.equal(hasAfter.hasKey, true);
+    assert.equal(hasAfter.providerID, "opencode-ttc-plugin");
+
+    const removed = await removeTuiAuthEntry({ authFilePath: authPath });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.removedAny, true);
+
+    const hasAfterRemove = await hasTtcAuthKey({ authFilePath: authPath });
+    assert.equal(hasAfterRemove.hasKey, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("auth store refuses to overwrite a corrupt file", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-corrupt-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(authPath, "{ not valid json,,,", "utf8");
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_new_key",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "auth_store_corrupt");
+
+    const preserved = await readFile(authPath, "utf8");
+    assert.equal(preserved, "{ not valid json,,,");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("auth store write is atomic — concurrent writer does not lose entries", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-race-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    await writeTuiAuthEntry({
+      apiKey: "ttc_first_key",
+      authFilePath: authPath
+    });
+    const intermediate = JSON.parse(await readFile(authPath, "utf8"));
+    intermediate["another-provider"] = { type: "api", key: "other_key" };
+    const { writeFile: realWriteFile, rename: realRename } = await import("node:fs/promises");
+    await realWriteFile(authPath, JSON.stringify(intermediate, null, 2), "utf8");
+
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_second_key",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+
+    const final = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(final["opencode-ttc-plugin"].key, "ttc_second_key");
+    assert.equal(final["another-provider"].key, "other_key");
+    void realRename;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("loadAuthStatus recognises legacy provider entries", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-authstatus-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({ "the-token-company-plugin": { type: "api", key: "legacy" } }),
+    "utf8"
+  );
+
+  try {
+    const status = await loadAuthStatus({ authFilePath: authPath });
+    assert.equal(status.hasKey, true);
+    assert.equal(status.providerID, "the-token-company-plugin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("known TTC model list is grounded in current docs", () => {
+  const ids = TUI_KNOWN_MODELS.map((model) => model.id);
+  assert.deepEqual(ids.sort(), ["bear-1.2", "bear-2"].sort());
+  assert.equal(TUI_AUTH_PROVIDER_ID, "opencode-ttc-plugin");
 });
