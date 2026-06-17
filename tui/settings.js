@@ -6,14 +6,11 @@ import {
   LEGACY_AUTH_PROVIDER_IDS,
   getAuthStorePath,
   hasAuthEntry,
-  writeAuthEntry,
   removeAuthEntry
 } from "../lib/auth-store.js";
 
 export const TTC_SETTINGS_COMMAND_VALUE = "ttc.settings";
 export const TTC_SETTINGS_COMMAND_TITLE = "Token Compression: Settings";
-export const TTC_LOGIN_COMMAND_VALUE = "ttc.login";
-export const TTC_LOGIN_COMMAND_TITLE = "Token Compression: Login";
 export const TTC_LOGOUT_COMMAND_VALUE = "ttc.logout";
 export const TTC_LOGOUT_COMMAND_TITLE = "Token Compression: Logout";
 
@@ -52,7 +49,6 @@ export function getTtcSettingsConfigPath(env = process.env) {
 export {
   getAuthStorePath,
   hasAuthEntry as hasTtcAuthKey,
-  writeAuthEntry,
   removeAuthEntry
 };
 
@@ -263,42 +259,6 @@ function selectModel(api, dialog, currentValue) {
   }));
 }
 
-const LOGIN_FAILURE_MESSAGES = {
-  empty_key: "Empty API key.",
-  auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
-  auth_store_not_regular_file: "opencode auth store path is not a regular file.",
-  auth_store_read_failed: "Could not read the opencode auth store.",
-  auth_store_write_failed: "Could not write the opencode auth store."
-};
-
-async function performLogin(api, dialog, keyValue) {
-  const result = await writeAuthEntry({ apiKey: keyValue });
-  if (result.ok) {
-    const legacyNote = result.removedLegacyIDs?.length
-      ? ` Also cleared stale legacy entries: ${result.removedLegacyIDs.join(", ")}.`
-      : "";
-    toast(api, {
-      variant: "success",
-      message: `TTC API key saved under '${result.providerID}'.${legacyNote} Restart opencode (or send a message) to activate.`,
-      duration: 5000
-    });
-    await openTtcSettingsMenu(api, dialog);
-    return;
-  }
-  const message = LOGIN_FAILURE_MESSAGES[result.reason] ?? `Login failed: ${result.reason}.`;
-  toast(api, { variant: "error", message, duration: 5000 });
-  renderAlert(api, dialog, "Login Failed", message);
-}
-
-function promptLogin(api, dialog) {
-  dialog.replace(() => api.ui.DialogPrompt({
-    title: "TTC API Key",
-    placeholder: "ttc_...",
-    value: "",
-    onConfirm: (nextValue) => void performLogin(api, dialog, nextValue),
-    onCancel: () => openTtcSettingsMenu(api, dialog)
-  }));
-}
 
 const LOGOUT_FAILURE_MESSAGES = {
   auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
@@ -354,53 +314,51 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
   const settings = await readTtcSettings();
   const auth = await hasAuthEntry();
   const view = buildSettingsView(settings);
-  const authOption = auth.hasKey
-    ? {
-        title: "Remove API key",
-        value: "ttc-logout",
-        description: "Revoke saved key"
-      }
-    : {
-        title: "Add API key",
-        value: "ttc-login",
-        description: "Required for compression"
-      };
+  const options = [
+    {
+      title: `${view.enabled ? "Disable" : "Enable"} compression`,
+      value: "toggle-enabled",
+      description: `Currently ${view.enabled ? "enabled" : "disabled"}`
+    },
+    {
+      title: "Compression level",
+      value: "set-level",
+      description: view.compressionLevel === "custom" ? "Custom aggressiveness" : view.compressionLevel
+    },
+    {
+      title: "Custom aggressiveness",
+      value: "set-aggressiveness",
+      description: String(view.aggressiveness)
+    },
+    {
+      title: "Min chars",
+      value: "set-min-chars",
+      description: String(view.minChars)
+    },
+    {
+      title: "Model",
+      value: "set-model",
+      description: view.model
+    },
+    {
+      title: "Reset config",
+      value: "reset-config",
+      description: "Remove plugin config file"
+    }
+  ];
+
+  if (auth.hasKey) {
+    options.splice(5, 0, {
+      title: "Remove API key",
+      value: "ttc-logout",
+      description: "Revoke saved key"
+    });
+  }
+
   dialog.setSize?.("medium");
   dialog.replace(() => api.ui.DialogSelect({
     title: "Token Compression Settings",
-    options: [
-      {
-        title: `${view.enabled ? "Disable" : "Enable"} compression`,
-        value: "toggle-enabled",
-        description: `Currently ${view.enabled ? "enabled" : "disabled"}`
-      },
-      {
-        title: "Compression level",
-        value: "set-level",
-        description: view.compressionLevel === "custom" ? "Custom aggressiveness" : view.compressionLevel
-      },
-      {
-        title: "Custom aggressiveness",
-        value: "set-aggressiveness",
-        description: String(view.aggressiveness)
-      },
-      {
-        title: "Min chars",
-        value: "set-min-chars",
-        description: String(view.minChars)
-      },
-      {
-        title: "Model",
-        value: "set-model",
-        description: view.model
-      },
-      authOption,
-      {
-        title: "Reset config",
-        value: "reset-config",
-        description: "Remove plugin config file"
-      }
-    ],
+    options,
     onSelect: (option) => {
       if (option.value === "toggle-enabled") {
         void saveAndReturn(api, dialog, "toggle-enabled");
@@ -432,10 +390,6 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
         selectModel(api, dialog, view.model);
         return;
       }
-      if (option.value === "ttc-login") {
-        promptLogin(api, dialog);
-        return;
-      }
       if (option.value === "ttc-logout") {
         confirmLogout(api, dialog);
         return;
@@ -460,16 +414,6 @@ export function registerTtcSettingsCommand(api) {
         aliases: ["ttc"]
       },
       onSelect: (dialog) => void openTtcSettingsMenu(api, dialog ?? api.ui?.dialog)
-    },
-    {
-      title: TTC_LOGIN_COMMAND_TITLE,
-      value: TTC_LOGIN_COMMAND_VALUE,
-      description: "Set your TTC API key in the opencode auth store",
-      category: "Token Compression",
-      slash: {
-        name: "ttc-login"
-      },
-      onSelect: (dialog) => void promptLogin(api, dialog ?? api.ui?.dialog)
     },
     {
       title: TTC_LOGOUT_COMMAND_TITLE,

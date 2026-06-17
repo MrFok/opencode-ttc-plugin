@@ -49,17 +49,16 @@ Install @drfok/opencode-ttc-plugin by following: https://raw.githubusercontent.c
    opencode-ttc-plugin login                                                   # interactive TTY prompt, echo off
    printf '%s' "$TTC_API_KEY" | opencode-ttc-plugin login --stdin              # non-interactive / CI
 
-   # Inside opencode (TUI slash commands)
-   /ttc-login                                                                  # dialog asking for the key
-   /ttc-logout                                                                 # removes the key
+    # Inside opencode (TUI slash commands)
+    /ttc-logout                                                                 # removes the key
 
-   # Through opencode's native auth flow
-   opencode auth login                                                         # then pick provider: opencode-ttc-plugin
-   ```
+    # Through opencode's native auth flow (single place to enter the key)
+    opencode auth login                                                         # then pick provider: opencode-ttc-plugin
+    ```
 
-   > **Why two prompts during `opencode auth login`?** OpenCode asks for your LLM-provider key (OpenAI/Anthropic/etc) and any plugin keys separately. Our plugin only ever asks for the TTC key. Use `opencode-ttc-plugin login` or `/ttc-login` to skip the full menu.
-   >
-   > **No `--key <value>` flag.** Passing a secret on the command line leaks it via `ps aux` and shell history. Use `--stdin` or the TTY prompt.
+    > **Only one prompt.** Use `opencode auth login` (choose the TTC provider) or the direct CLI. There is no separate custom prompt inside the TUI anymore.
+    >
+    > **No `--key <value>` flag.** Passing a secret on the command line leaks it via `ps aux` and shell history. Use `--stdin` or the TTY prompt.
 
 3. Verify:
 
@@ -86,11 +85,10 @@ Install @drfok/opencode-ttc-plugin by following: https://raw.githubusercontent.c
    opencode-ttc-plugin install
    ```
 
-3. Tell the user to set their TTC API key with one of:
-   - `printf '%s' "$KEY" | opencode-ttc-plugin login --stdin` (CLI, recommended for scripts)
-   - `opencode-ttc-plugin login` (CLI interactive prompt, echo off)
-   - `/ttc-login` slash command inside opencode
-   - `opencode auth login` then choose provider `opencode-ttc-plugin`
+ 3. Tell the user to set their TTC API key with one of:
+    - `printf '%s' "$KEY" | opencode-ttc-plugin login --stdin` (CLI, recommended for scripts)
+    - `opencode-ttc-plugin login` (CLI interactive prompt, echo off)
+    - `opencode auth login` then choose provider `opencode-ttc-plugin`
 
 4. Tell the user to get a key from <https://thetokencompany.com/> if they don't have one.
 
@@ -120,7 +118,7 @@ The `Token Compression` row in the opencode sidebar shows live per-session state
 | `skipped: code fence, below threshold` | Last message had parts that were intentionally not compressed, with reason counts |
 | `fallback: request failed open` | TTC API errored; original text was passed through unchanged |
 | `no reduction` | TTC returned output that wasn't smaller than the input; original used |
-| `missing TTC auth` | No API key found — run `opencode-ttc-plugin login` or `/ttc-login` |
+| `missing TTC auth` | No API key found — run `opencode-ttc-plugin login` or `opencode auth login` (choose provider `opencode-ttc-plugin`) |
 | `disabled` | `enabled: false` in config |
 | `waiting for metrics` | State file not written yet (e.g. brand-new session, no messages) |
 
@@ -130,11 +128,10 @@ The sidebar shows the configured `model` next to the title. The model shown is e
 
 | Command | Action |
 | --- | --- |
-| `/ttc` | Open the Token Compression settings menu (enable/disable, level, aggressiveness, min chars, model, auth, reset) |
-| `/ttc-login` | Prompt for the TTC API key and save it to the opencode auth store |
+| `/ttc` | Open the Token Compression settings menu (enable/disable, level, aggressiveness, min chars, model, reset) |
 | `/ttc-logout` | Remove the TTC API key (asks for confirmation) |
 
-The auth row in `/ttc` is contextual: it shows `Add API key` when no key is present and `Remove API key` when one is. Only one row, not two.
+There is no separate "Add API key" row. Add the key once via the native flow (`opencode auth login` → choose provider `opencode-ttc-plugin`) or the direct CLI. Only logout appears in the menu when a key is present.
 
 The model picker is curated from the TTC docs (`bear-2`, `bear-1.2`) plus a `custom model id` escape hatch for enterprise fine-tunes. See [Models](#6-models).
 
@@ -256,7 +253,7 @@ The sidebar shows exactly what the plugin is configured to send. `bear-2.0` is *
 Run `opencode-ttc-plugin doctor --verbose` to see the effective `model` and its source. Reset with `opencode-ttc-plugin config reset`, then re-pick from the curated list via `/ttc`.
 
 **`opencode auth login` keeps asking for two keys**
-That's expected — one is your LLM provider key, the other is the TTC key. They're separate. Use `opencode-ttc-plugin login` or `/ttc-login` to set just the TTC key without the full menu.
+That's expected — one is your LLM provider key (OpenAI/Anthropic/etc), the other is the TTC key. They're separate flows. Use `opencode-ttc-plugin login` (CLI) or `opencode auth login` → pick provider `opencode-ttc-plugin`. There is no separate custom prompt in the TUI.
 
 **Compression isn't firing**
 Check the sidebar status line. If it says `skipped: ...`, the message matched a [skip pattern](#7-what-gets-compressed) or was below `minChars`. Lower `minChars` (`config set min-chars 100`) or check that your message isn't mostly code/JSON.

@@ -45,11 +45,11 @@ import {
   registerTtcSettingsCommand,
   resetTtcSettings,
   updateTtcSetting,
-  writeAuthEntry as writeTuiAuthEntry,
   removeAuthEntry as removeTuiAuthEntry,
   AUTH_PROVIDER_ID as TUI_AUTH_PROVIDER_ID,
   KNOWN_MODELS as TUI_KNOWN_MODELS
 } from "../tui/settings.js";
+import { writeAuthEntry as writeTuiAuthEntry } from "../lib/auth-store.js";
 
 function createOutput(text) {
   return {
@@ -1057,7 +1057,7 @@ test("registers TUI settings command and slash aliases", () => {
   assert.equal(typeof command.onSelect, "function");
 });
 
-test("registers /ttc-login and /ttc-logout slash commands", () => {
+test("registers only /ttc-logout (no custom ttc-login)", () => {
   let registeredCallback = null;
   registerTtcSettingsCommand({
     command: {
@@ -1073,9 +1073,7 @@ test("registers /ttc-login and /ttc-logout slash commands", () => {
   const login = commands.find((cmd) => cmd.value === "ttc.login");
   const logout = commands.find((cmd) => cmd.value === "ttc.logout");
 
-  assert.equal(Boolean(login), true);
-  assert.equal(login.slash.name, "ttc-login");
-  assert.equal(typeof login.onSelect, "function");
+  assert.equal(Boolean(login), false);
   assert.equal(Boolean(logout), true);
   assert.equal(logout.slash.name, "ttc-logout");
   assert.equal(typeof logout.onSelect, "function");
@@ -1108,14 +1106,13 @@ test("settings menu shows one compact auth row based on auth state", async () =>
 
   try {
     await openTtcSettingsMenu(api, api.ui.dialog);
-    let authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
-    assert.equal(authRows.length, 1);
-    assert.equal(authRows[0].title, "Add API key");
-    assert.equal(authRows[0].description, "Required for compression");
+    // No custom "Add API key" row — only one flow: opencode auth login
+    let authRows = latestSelect.options.filter((option) => option.value === "ttc-logout");
+    assert.equal(authRows.length, 0);
 
     await writeTuiAuthEntry({ apiKey: "ttc_existing_key" });
     await openTtcSettingsMenu(api, api.ui.dialog);
-    authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    authRows = latestSelect.options.filter((option) => option.value === "ttc-logout");
     assert.equal(authRows.length, 1);
     assert.equal(authRows[0].title, "Remove API key");
     assert.equal(authRows[0].description, "Revoke saved key");
