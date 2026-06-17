@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
 
-const AUTH_PROVIDER_ID = "the-token-company-plugin";
+const AUTH_PROVIDER_ID = "opencode-ttc-plugin";
+const LEGACY_AUTH_PROVIDER_IDS = ["the-token-company-plugin"];
 const LOCKED_BASE_URL = "https://api.thetokencompany.com";
 
 const COMPRESSION_LEVELS = {
@@ -709,23 +710,28 @@ function resolveBehaviorConfig({
 
 async function resolveApiKeyFromAuthStore({
   providerID = AUTH_PROVIDER_ID,
+  legacyProviderIDs = LEGACY_AUTH_PROVIDER_IDS,
   authFilePath = getAuthStorePath(),
   readFileImpl = readFile
 } = {}) {
+  let parsed;
   try {
     const content = await readFileImpl(authFilePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!parsed || typeof parsed !== "object") return "";
-
-    const auth = parsed[providerID];
-    if (!auth || typeof auth !== "object") return "";
-    if (auth.type !== "api") return "";
-
-    const key = String(auth.key ?? "").trim();
-    return key;
+    parsed = JSON.parse(content);
   } catch {
     return "";
   }
+  if (!parsed || typeof parsed !== "object") return "";
+
+  const candidateIDs = [providerID, ...legacyProviderIDs];
+  for (const candidateID of candidateIDs) {
+    const auth = parsed[candidateID];
+    if (!auth || typeof auth !== "object") continue;
+    if (auth.type !== "api") continue;
+    const key = String(auth.key ?? "").trim();
+    if (key) return key;
+  }
+  return "";
 }
 
 function resolveEffectiveApiKey(envApiKey, authStoreApiKey) {
@@ -1109,6 +1115,7 @@ const TtcMessageTransformPlugin = async ({ client }) => {
     enabled: initialConfig.enabled,
     has_api_key: Boolean(initialConfig.apiKey),
     auth_provider_id: AUTH_PROVIDER_ID,
+    legacy_auth_provider_ids: LEGACY_AUTH_PROVIDER_IDS,
     auth_source: initialApiKeyResolution.source,
     base_url_source: initialConfig.baseUrlSource,
     behavior_sources: initialBehaviorResolution.sources,
@@ -1134,12 +1141,12 @@ const TtcMessageTransformPlugin = async ({ client }) => {
       methods: [
         {
           type: "api",
-          label: "Set TTC API Key",
+          label: "The Token Company (TTC) API key",
           prompts: [
             {
               type: "text",
               key: "apiKey",
-              message: "Enter TTC API key",
+              message: "Enter TTC API key (from thetokencompany.com)",
               placeholder: "ttc_..."
             }
           ],
@@ -1191,6 +1198,7 @@ export default TtcMessageTransformPlugin;
 
 TtcMessageTransformPlugin._test = {
   AUTH_PROVIDER_ID,
+  LEGACY_AUTH_PROVIDER_IDS,
   COMPRESSION_LEVELS,
   buildTtcPluginConfig,
   getPluginConfigPath,

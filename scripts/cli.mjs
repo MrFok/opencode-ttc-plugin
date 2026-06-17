@@ -12,10 +12,22 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import readline from "node:readline";
+import {
+  AUTH_PROVIDER_ID,
+  LEGACY_AUTH_PROVIDER_IDS,
+  getAuthStorePath,
+  hasAuthEntry,
+  writeAuthEntry,
+  removeAuthEntry
+} from "../lib/auth-store.js";
 
 const PLUGIN_FILENAME = "ttc-message-transform.js";
-const AUTH_PROVIDER_ID = "the-token-company-plugin";
 const DEFAULT_AGGRESSIVENESS = 0.1;
+const KNOWN_MODELS = [
+  { id: "bear-2", description: "Most accurate compression. Recommended per TTC docs." },
+  { id: "bear-1.2", description: "Faster compression. Lower latency per request." }
+];
 const COMPRESSION_LEVELS = {
   low: 0.05,
   balanced: 0.1,
@@ -62,12 +74,6 @@ const packageJsonPath = resolve(repoRoot, "package.json");
 const tuiEntrypointPath = resolve(repoRoot, "tui", "index.tsx");
 const pluginsDir = resolve(homedir(), ".config", "opencode", "plugins");
 const installedPluginPath = resolve(pluginsDir, PLUGIN_FILENAME);
-
-function getAuthStorePath() {
-  const xdgDataHome = String(process.env.XDG_DATA_HOME ?? "").trim();
-  const dataHome = xdgDataHome || resolve(homedir(), ".local", "share");
-  return resolve(dataHome, "opencode", "auth.json");
-}
 
 function getPluginConfigPath() {
   const xdgConfigHome = String(process.env.XDG_CONFIG_HOME ?? "").trim();
@@ -246,28 +252,137 @@ function resolveBehaviorFromSources(settings) {
 
 function hasAuthStoreKey() {
   const authPath = getAuthStorePath();
-  if (!existsSync(authPath)) {
-    return { hasKey: false, path: authPath };
-  }
+  const entry = hasAuthEntrySync(authPath);
+  return { hasKey: Boolean(entry), path: authPath, providerID: entry?.providerID ?? null };
+}
 
+function hasAuthEntrySync(authPath) {
   try {
-    const parsed = JSON.parse(readFileSync(authPath, "utf8"));
-    const auth = parsed?.[AUTH_PROVIDER_ID];
-    const hasKey = Boolean(auth && auth.type === "api" && String(auth.key ?? "").trim());
-    return { hasKey, path: authPath };
+    const raw = readFileSync(authPath, "utf8");
+    const trimmed = String(raw ?? "").trim();
+    if (!trimmed) return null;
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    for (const candidateID of [AUTH_PROVIDER_ID, ...LEGACY_AUTH_PROVIDER_IDS]) {
+      const auth = parsed[candidateID];
+      if (auth && auth.type === "api" && String(auth.key ?? "").trim()) {
+        return { providerID: candidateID, key: String(auth.key).trim() };
+      }
+    }
+    return null;
   } catch {
-    return { hasKey: false, path: authPath };
+    return null;
   }
 }
 
 function printUsage() {
-  console.log("Usage: opencode-ttc-plugin <install|doctor|uninstall|config>");
+  console.log("Usage: opencode-ttc-plugin <install|doctor|uninstall|config|login|logout>");
   console.log("       opencode-ttc-plugin doctor [--verbose]");
   console.log("       opencode-ttc-plugin config get");
   console.log("       opencode-ttc-plugin config set level <low|balanced|high|max>");
   console.log("       opencode-ttc-plugin config set aggressiveness <0..1>");
   console.log("       opencode-ttc-plugin config set <setting> <value>");
   console.log("       opencode-ttc-plugin config reset");
+  console.log("       opencode-ttc-plugin login [--stdin]    (key from stdin, no echo)");
+  console.log("       opencode-ttc-plugin logout");
+}
+
+function promptSecret(query) {
+  return new Promise((onResolve) => {
+    const input = process.stdin;
+    const output = process.stdout;
+    const isTTY = Boolean(input.isTTY);
+    const originalIsRaw = isTTY && input.isRaw;
+    const rl = readline.createInterface({ input, output, terminal: isTTY });
+    const restore = () => {
+      try {
+        if (isTTY && typeof input.setRawMode === "function") {
+          input.setRawMode(Boolean(originalIsRaw));
+        }
+      } catch {
+        // ignore
+      }
+    };
+    if (isTTY && typeof input.setRawMode === "function") {
+      try { input.setRawMode(true); } catch { /* ignore */ }
+    }
+    rl.question(query, (answer) => {
+      restore();
+      rl.close();
+      output.write("\n");
+      onResolve(String(answer ?? "").replace(/\r?\n$/, ""));
+    });
+    rl.on("SIGINT", () => {
+      restore();
+      rl.close();
+      output.write("\n");
+      onResolve("");
+    });
+  });
+}
+
+async function readStdinSecret() {
+  let data = "";
+  for await (const chunk of process.stdin) {
+    data += String(chunk);
+  }
+  return data.replace(/\r?\n$/, "").trim();
+}
+
+async function persistKey(apiKey) {
+  if (!apiKey) {
+    console.error("Login cancelled: no key entered.");
+    process.exitCode = 1;
+    return;
+  }
+  const result = await writeAuthEntry({ apiKey });
+  if (!result.ok) {
+    console.error(`Login failed: ${result.reason}${result.error ? ` (${result.error.message})` : ""}`);
+    if (result.reason === "auth_store_corrupt") {
+      console.error(`Refusing to overwrite corrupt auth store at ${result.authFilePath}. Back it up and remove it manually.`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+  console.log(`Saved TTC API key under '${result.providerID}' at ${result.authFilePath}`);
+  console.log("Restart opencode for sessions to pick up the new key.");
+}
+
+async function loginCommand(args) {
+  const useStdin = args.includes("--stdin");
+  if (useStdin) {
+    if (process.stdin.isTTY) {
+      console.error('Login --stdin requires the key to be piped (e.g. printf %s "$KEY" | opencode-ttc-plugin login --stdin).');
+      process.exitCode = 1;
+      return;
+    }
+    const apiKey = await readStdinSecret();
+    await persistKey(apiKey);
+    return;
+  }
+
+  if (process.stdin.isTTY) {
+    const apiKey = await promptSecret("Enter TTC API key (from thetokencompany.com): ");
+    await persistKey(apiKey);
+    return;
+  }
+
+  console.error('Login requires --stdin when stdin is not a TTY (e.g. printf %s "$KEY" | opencode-ttc-plugin login --stdin).');
+  process.exitCode = 1;
+}
+
+async function logoutCommand() {
+  const result = await removeAuthEntry();
+  if (!result.ok) {
+    console.error(`Logout failed: ${result.reason}${result.error ? ` (${result.error.message})` : ""}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!result.removedAny) {
+    console.log(`No TTC auth entry found at ${result.authFilePath}`);
+    return;
+  }
+  console.log(`Removed TTC auth entries at ${result.authFilePath}`);
 }
 
 function detectCommand(argv, scriptName) {
@@ -316,7 +431,14 @@ function doctor(options = { verbose: false }) {
     {
       label: `auth store (${AUTH_PROVIDER_ID})`,
       ok: true,
-      value: authStore.hasKey ? `set (${authStore.path})` : `missing (${authStore.path})`
+      value: authStore.hasKey
+        ? `set under '${authStore.providerID}' (${authStore.path})`
+        : `missing (${authStore.path})`
+    },
+    {
+      label: "known TTC models",
+      ok: true,
+      value: KNOWN_MODELS.map((model) => model.id).join(", ")
     },
     { label: "effective auth source", ok: hasUsableAuth, value: authSource },
     {
@@ -496,7 +618,7 @@ function uninstall() {
   console.log(`Removed ${installedPluginPath}`);
 }
 
-function main() {
+async function main() {
   const scriptName = basename(process.argv[1] ?? "");
   const command = detectCommand(process.argv, scriptName);
   const args = process.argv.slice(3);
@@ -518,6 +640,16 @@ function main() {
 
   if (command === "config") {
     configCommand(args);
+    return;
+  }
+
+  if (command === "login") {
+    await loginCommand(args);
+    return;
+  }
+
+  if (command === "logout") {
+    logoutCommand();
     return;
   }
 
