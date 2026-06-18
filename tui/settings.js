@@ -351,9 +351,9 @@ export async function openTtcSettingsMenu(api, dialog = api.ui?.dialog) {
   if (!api?.ui || !dialog?.replace) return;
 
   const settings = await readTtcSettings();
-  const auth = await hasAuthEntry();
+  const storeAuth = await hasAuthEntry({ env: {} });
   const view = buildSettingsView(settings);
-  const authOption = auth.hasKey
+  const authOption = storeAuth.hasKey
     ? {
         title: "Remove API key",
         value: "ttc-logout",

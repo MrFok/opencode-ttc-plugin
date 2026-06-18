@@ -1081,15 +1081,17 @@ test("registers /ttc-login and /ttc-logout slash commands", () => {
   assert.equal(typeof logout.onSelect, "function");
 });
 
-test("settings menu shows one compact auth row based on auth state", async () => {
+test("settings menu shows one compact auth row based on persisted auth state", async () => {
   const tempDataHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-data-"));
   const tempConfigHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-config-"));
   const originalEnv = {
     XDG_DATA_HOME: process.env.XDG_DATA_HOME,
-    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    TTC_API_KEY: process.env.TTC_API_KEY
   };
   process.env.XDG_DATA_HOME = tempDataHome;
   process.env.XDG_CONFIG_HOME = tempConfigHome;
+  process.env.TTC_API_KEY = "ttc_env_key";
 
   let latestSelect = null;
   const api = {
@@ -1108,14 +1110,16 @@ test("settings menu shows one compact auth row based on auth state", async () =>
 
   try {
     await openTtcSettingsMenu(api, api.ui.dialog);
-    // No custom "Add API key" row — only one flow: opencode auth login
-    let authRows = latestSelect.options.filter((option) => option.value === "ttc-logout");
-    assert.equal(authRows.length, 0);
+    let authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].value, "ttc-login");
+    assert.equal(authRows[0].title, "Add API key");
 
     await writeTuiAuthEntry({ apiKey: "ttc_existing_key" });
     await openTtcSettingsMenu(api, api.ui.dialog);
-    authRows = latestSelect.options.filter((option) => option.value === "ttc-logout");
+    authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
     assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].value, "ttc-logout");
     assert.equal(authRows[0].title, "Remove API key");
     assert.equal(authRows[0].description, "Revoke saved key");
   } finally {
@@ -1124,6 +1128,9 @@ test("settings menu shows one compact auth row based on auth state", async () =>
 
     if (originalEnv.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
     else process.env.XDG_CONFIG_HOME = originalEnv.XDG_CONFIG_HOME;
+
+    if (originalEnv.TTC_API_KEY === undefined) delete process.env.TTC_API_KEY;
+    else process.env.TTC_API_KEY = originalEnv.TTC_API_KEY;
 
     await rm(tempDataHome, { recursive: true, force: true });
     await rm(tempConfigHome, { recursive: true, force: true });
@@ -1252,7 +1259,7 @@ test("auth store refuses to overwrite a corrupt file", async () => {
   }
 });
 
-test("auth store write is atomic — concurrent writer does not lose entries", async () => {
+test("auth store write preserves unrelated providers during sequential key rotation", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-race-"));
   const authPath = join(tempDir, "opencode", "auth.json");
 
@@ -1279,6 +1286,17 @@ test("auth store write is atomic — concurrent writer does not lose entries", a
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("logout refuses unsupported auth-store paths instead of claiming success", async () => {
+  const result = await removeTuiAuthEntry({
+    authFilePath: "/tmp/opencode-auth-symlink.json",
+    lstatImpl: async () => ({ isFile: () => false })
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "auth_store_not_regular_file");
+  assert.equal(result.removedAny, undefined);
 });
 
 test("login rotates away stale legacy TTC entries and leaves unrelated providers intact", async () => {
