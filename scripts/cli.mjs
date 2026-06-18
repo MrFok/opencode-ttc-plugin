@@ -654,7 +654,7 @@ async function main() {
   }
 
   if (command === "logout") {
-    logoutCommand();
+    await logoutCommand();
     return;
   }
 

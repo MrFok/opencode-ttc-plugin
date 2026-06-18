@@ -50,13 +50,14 @@ Install @drfok/opencode-ttc-plugin by following: https://raw.githubusercontent.c
    printf '%s' "$TTC_API_KEY" | opencode-ttc-plugin login --stdin              # non-interactive / CI
 
     # Inside opencode (TUI slash commands)
-    /ttc-logout                                                                 # removes the key
+    /ttc-login                                                                  # shows safe login instructions
+    /ttc-logout                                                                 # removes a saved key
 
     # Through opencode's native auth flow (single place to enter the key)
     opencode auth login                                                         # then pick provider: opencode-ttc-plugin
     ```
 
-    > **Only one prompt.** Use `opencode auth login` (choose the TTC provider) or the direct CLI. There is no separate custom prompt inside the TUI anymore.
+    > **Only one prompt.** Use `opencode auth login` (choose the TTC provider) or the direct CLI. `/ttc-login` does not collect the secret in the TUI because the available prompt dialog displays plain text.
     >
     > **No `--key <value>` flag.** Passing a secret on the command line leaks it via `ps aux` and shell history. Use `--stdin` or the TTY prompt.
 
@@ -129,9 +130,10 @@ The sidebar shows the configured `model` next to the title. The model shown is e
 | Command | Action |
 | --- | --- |
 | `/ttc` | Open the Token Compression settings menu (enable/disable, level, aggressiveness, min chars, model, reset) |
+| `/ttc-login` | Show safe API-key login instructions (native auth flow or CLI) |
 | `/ttc-logout` | Remove the TTC API key (asks for confirmation) |
 
-There is no separate "Add API key" row. Add the key once via the native flow (`opencode auth login` → choose provider `opencode-ttc-plugin`) or the direct CLI. Only logout appears in the menu when a key is present.
+The `/ttc` menu shows one auth row: `Add API key` when no saved key exists, or `Remove API key` when a key is saved. `Add API key` opens the same safe instructions as `/ttc-login`; it does not render a visible secret input.
 
 The model picker is curated from the TTC docs (`bear-2`, `bear-1.2`) plus a `custom model id` escape hatch for enterprise fine-tunes. See [Models](#6-models).
 

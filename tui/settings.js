@@ -263,45 +263,17 @@ function selectModel(api, dialog, currentValue) {
   }));
 }
 
-const LOGIN_FAILURE_MESSAGES = {
-  empty_key: "Empty API key.",
-  auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
-  auth_store_not_regular_file: "opencode auth store path is not a regular file.",
-  auth_store_read_failed: "Could not read the opencode auth store.",
-  auth_store_write_failed: "Could not write the opencode auth store."
-};
-
-async function performLogin(api, dialog, keyValue) {
-  const result = await writeAuthEntry({ apiKey: keyValue });
-  if (result.ok) {
-    const legacyNote = result.removedLegacyIDs?.length
-      ? ` Also cleared stale legacy entries: ${result.removedLegacyIDs.join(", ")}.`
-      : "";
-    toast(api, {
-      variant: "success",
-      message: `TTC API key saved under '${result.providerID}'.${legacyNote} Restart opencode (or send a message) to activate.`,
-      duration: 5000
-    });
-    await openTtcSettingsMenu(api, dialog);
-    return;
-  }
-  const message = LOGIN_FAILURE_MESSAGES[result.reason] ?? `Login failed: ${result.reason}.`;
-  toast(api, { variant: "error", message, duration: 5000 });
-  renderAlert(api, dialog, "Login Failed", message);
-}
-
 function promptLogin(api, dialog) {
-  dialog.replace(() => api.ui.DialogPrompt({
-    title: "TTC API Key",
-    placeholder: "ttc_...",
-    value: "",
-    onConfirm: (nextValue) => void performLogin(api, dialog, nextValue),
-    onCancel: () => openTtcSettingsMenu(api, dialog)
+  dialog.replace(() => api.ui.DialogAlert({
+    title: "Add TTC API Key",
+    message: "Use `opencode auth login` and choose opencode-ttc-plugin, or run `opencode-ttc-plugin login` in a terminal. The TUI does not accept API keys because plain dialogs can display secrets.",
+    onConfirm: () => openTtcSettingsMenu(api, dialog)
   }));
 }
 
 const LOGOUT_FAILURE_MESSAGES = {
   auth_store_corrupt: "opencode auth store is corrupt — refusing to overwrite. Back up and remove the file manually.",
+  auth_store_not_regular_file: "opencode auth store path is not a regular file.",
   auth_store_read_failed: "Could not read the opencode auth store.",
   auth_store_write_failed: "Could not write the opencode auth store."
 };

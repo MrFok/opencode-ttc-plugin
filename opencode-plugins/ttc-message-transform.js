@@ -217,7 +217,10 @@ function hydrateSessionStatsFromSidebarState(state) {
   if (!state || typeof state !== "object") return null;
   if (state.schemaVersion !== 1) return null;
 
-  const numberOrZero = (value) => Math.max(0, Number(value) || 0);
+  const numberOrZero = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  };
   const stats = createSessionStats();
   const session = state.session && typeof state.session === "object" ? state.session : {};
   const lastMessage = state.lastMessage && typeof state.lastMessage === "object" ? state.lastMessage : {};

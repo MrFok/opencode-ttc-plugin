@@ -729,6 +729,31 @@ test("hydrates session stats from persisted sidebar state before writing new res
   }
 });
 
+test("hydrating sidebar state ignores non-finite numeric counters", () => {
+  const hydrated = hydrateSessionStatsFromSidebarState({
+    schemaVersion: 1,
+    session: {
+      processed: Infinity,
+      compressed: "Infinity",
+      skipped: -2,
+      charsBefore: "120"
+    },
+    lastMessage: {
+      charsBefore: Infinity,
+      tokensSaved: "NaN",
+      partsProcessed: 3
+    }
+  });
+
+  assert.equal(hydrated.processed, 0);
+  assert.equal(hydrated.compressed, 0);
+  assert.equal(hydrated.skipped, 0);
+  assert.equal(hydrated.charsBefore, 120);
+  assert.equal(hydrated.lastMessageCharsBefore, 0);
+  assert.equal(hydrated.lastMessageTokensSaved, 0);
+  assert.equal(hydrated.lastMessagePartsProcessed, 3);
+});
+
 test("concurrent first-use hydration shares one persisted session stats object", async () => {
   const priorStats = createSessionStats();
   recordProcessedPart(priorStats, {
@@ -1081,6 +1106,43 @@ test("registers /ttc-login and /ttc-logout slash commands", () => {
   assert.equal(typeof logout.onSelect, "function");
 });
 
+test("/ttc-login never opens a visible secret prompt", () => {
+  let registeredCallback = null;
+  let alertInput = null;
+  let promptOpened = false;
+  const api = {
+    command: {
+      register(callback) {
+        registeredCallback = callback;
+        return () => {};
+      }
+    },
+    ui: {
+      DialogAlert(input) {
+        alertInput = input;
+        return input;
+      },
+      DialogPrompt() {
+        promptOpened = true;
+        return {};
+      },
+      dialog: {
+        replace(render) { render(); }
+      },
+      toast() {}
+    }
+  };
+
+  registerTtcSettingsCommand(api);
+  const login = registeredCallback().find((cmd) => cmd.value === "ttc.login");
+  login.onSelect(api.ui.dialog);
+
+  assert.equal(promptOpened, false);
+  assert.equal(alertInput.title, "Add TTC API Key");
+  assert.equal(alertInput.message.includes("opencode auth login"), true);
+  assert.equal(alertInput.message.includes("opencode-ttc-plugin login"), true);
+});
+
 test("settings menu shows one compact auth row based on persisted auth state", async () => {
   const tempDataHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-data-"));
   const tempConfigHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-config-"));
@@ -1222,6 +1284,8 @@ test("TUI auth helpers write/remove key under current provider id with secure fi
     const { statSync } = await import("node:fs");
     const mode = statSync(authPath).mode & 0o777;
     assert.equal(mode, 0o600, `auth file should be 0o600, got 0o${mode.toString(8)}`);
+    const dirMode = statSync(dirname(authPath)).mode & 0o777;
+    assert.equal(dirMode, 0o700, `auth directory should be 0o700, got 0o${dirMode.toString(8)}`);
 
     const hasAfter = await hasTtcAuthKey({ authFilePath: authPath });
     assert.equal(hasAfter.hasKey, true);
@@ -1233,6 +1297,34 @@ test("TUI auth helpers write/remove key under current provider id with secure fi
 
     const hasAfterRemove = await hasTtcAuthKey({ authFilePath: authPath });
     assert.equal(hasAfterRemove.hasKey, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("logout deletes targeted provider entries even when stored value is falsy", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-falsy-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({
+      "opencode-ttc-plugin": null,
+      "the-token-company-plugin": "",
+      anthropic: { type: "api", key: "sk-ant-keep" }
+    }, null, 2),
+    "utf8"
+  );
+
+  try {
+    const removed = await removeTuiAuthEntry({ authFilePath: authPath });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.removedAny, true);
+
+    const stored = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(Object.prototype.hasOwnProperty.call(stored, "opencode-ttc-plugin"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(stored, "the-token-company-plugin"), false);
+    assert.equal(stored.anthropic.key, "sk-ant-keep");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
