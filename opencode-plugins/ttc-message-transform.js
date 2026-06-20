@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { gzipSync } from "node:zlib";
 
-const AUTH_PROVIDER_ID = "the-token-company-plugin";
+const AUTH_PROVIDER_ID = "opencode-ttc-plugin";
+const LEGACY_AUTH_PROVIDER_IDS = ["the-token-company-plugin"];
 const LOCKED_BASE_URL = "https://api.thetokencompany.com";
 
 const COMPRESSION_LEVELS = {
@@ -212,12 +213,66 @@ function createSessionStats() {
   };
 }
 
-function getSessionStats(sessionStats, sessionID) {
-  if (!sessionStats || !sessionID) return null;
-  if (!sessionStats.has(sessionID)) {
-    sessionStats.set(sessionID, createSessionStats());
+function hydrateSessionStatsFromSidebarState(state) {
+  if (!state || typeof state !== "object") return null;
+  if (state.schemaVersion !== 1) return null;
+
+  const numberOrZero = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  };
+  const stats = createSessionStats();
+  const session = state.session && typeof state.session === "object" ? state.session : {};
+  const lastMessage = state.lastMessage && typeof state.lastMessage === "object" ? state.lastMessage : {};
+
+  stats.processed = numberOrZero(session.processed);
+  stats.compressed = numberOrZero(session.compressed);
+  stats.skipped = numberOrZero(session.skipped);
+  stats.fallback = numberOrZero(session.fallback);
+  stats.cacheHits = numberOrZero(session.cacheHits);
+  stats.charsBefore = numberOrZero(session.charsBefore);
+  stats.charsAfter = numberOrZero(session.charsAfter);
+  stats.estimatedTokensSaved = numberOrZero(session.estimatedTokensSaved);
+  stats.exactTokensSaved = numberOrZero(session.exactTokensSaved);
+  stats.lastMessageCharsBefore = numberOrZero(lastMessage.charsBefore);
+  stats.lastMessageCharsAfter = numberOrZero(lastMessage.charsAfter);
+  stats.lastMessageTokensSaved = numberOrZero(lastMessage.tokensSaved);
+  stats.lastMessagePartsProcessed = numberOrZero(lastMessage.partsProcessed);
+  stats.lastMessageCompressed = Boolean(lastMessage.compressed);
+  stats.lastMessageNoReduction = Boolean(lastMessage.noReduction);
+  stats.lastMessageFallback = Boolean(lastMessage.fallback);
+  stats.lastMessageSkipReasons = lastMessage.skipReasons && typeof lastMessage.skipReasons === "object"
+    ? Object.fromEntries(Object.entries(lastMessage.skipReasons).map(([reason, count]) => [reason, numberOrZero(count)]))
+    : {};
+  stats.version = stats.processed + stats.skipped + stats.fallback > 0 ? 1 : 0;
+
+  return stats;
+}
+
+async function loadPersistedSessionStats(sessionID, {
+  statePath = getSidebarStatePath(sessionID),
+  readFileImpl = readFile
+} = {}) {
+  try {
+    const content = await readFileImpl(statePath, "utf8");
+    return hydrateSessionStatsFromSidebarState(JSON.parse(content));
+  } catch {
+    return null;
   }
-  return sessionStats.get(sessionID);
+}
+
+async function getSessionStats(sessionStats, sessionID, options = {}) {
+  if (!sessionStats || !sessionID) return null;
+  const existing = sessionStats.get(sessionID);
+  if (existing) return await existing;
+
+  const pendingStats = loadPersistedSessionStats(sessionID, options).then((stats) => stats ?? createSessionStats());
+  sessionStats.set(sessionID, pendingStats);
+  const stats = await pendingStats;
+  if (sessionStats.get(sessionID) === pendingStats) {
+    sessionStats.set(sessionID, stats);
+  }
+  return stats;
 }
 
 function updateStatsVersion(stats) {
@@ -433,9 +488,11 @@ function buildTtcPluginConfig(env = process.env) {
 }
 
 function getAuthStorePath(env = process.env) {
-  const xdgDataHome = String(env.XDG_DATA_HOME ?? "").trim();
-  const dataHome = xdgDataHome || join(homedir(), ".local", "share");
-  return join(dataHome, "opencode", "auth.json");
+  const raw = String(env.XDG_DATA_HOME ?? "").trim();
+  if (raw && isAbsolute(raw)) {
+    return join(raw, "opencode", "auth.json");
+  }
+  return join(homedir(), ".local", "share", "opencode", "auth.json");
 }
 
 function getPluginConfigPath(env = process.env) {
@@ -709,23 +766,28 @@ function resolveBehaviorConfig({
 
 async function resolveApiKeyFromAuthStore({
   providerID = AUTH_PROVIDER_ID,
+  legacyProviderIDs = LEGACY_AUTH_PROVIDER_IDS,
   authFilePath = getAuthStorePath(),
   readFileImpl = readFile
 } = {}) {
+  let parsed;
   try {
     const content = await readFileImpl(authFilePath, "utf8");
-    const parsed = JSON.parse(content);
-    if (!parsed || typeof parsed !== "object") return "";
-
-    const auth = parsed[providerID];
-    if (!auth || typeof auth !== "object") return "";
-    if (auth.type !== "api") return "";
-
-    const key = String(auth.key ?? "").trim();
-    return key;
+    parsed = JSON.parse(content);
   } catch {
     return "";
   }
+  if (!parsed || typeof parsed !== "object") return "";
+
+  const candidateIDs = [providerID, ...legacyProviderIDs];
+  for (const candidateID of candidateIDs) {
+    const auth = parsed[candidateID];
+    if (!auth || typeof auth !== "object") continue;
+    if (auth.type !== "api") continue;
+    const key = String(auth.key ?? "").trim();
+    if (key) return key;
+  }
+  return "";
 }
 
 function resolveEffectiveApiKey(envApiKey, authStoreApiKey) {
@@ -936,6 +998,8 @@ async function transformMessagesWithTtc({
   cache,
   sessionStats = null,
   authSource = "unknown",
+  readSidebarStateImpl = readFile,
+  env = process.env,
   writeSidebarStateImpl = writeSidebarState,
   fetchImpl = fetch
 }) {
@@ -946,12 +1010,17 @@ async function transformMessagesWithTtc({
   const latestUserMessageID = latestUser?.info?.id;
   const latestUserSessionID = latestUser?.info?.sessionID ?? currentSessionID;
   if (!config.enabled || !config.apiKey) {
-    const stats = getSessionStats(sessionStats, latestUserSessionID);
+    const statePath = getSidebarStatePath(latestUserSessionID, env);
+    const stats = await getSessionStats(sessionStats, latestUserSessionID, {
+      statePath,
+      readFileImpl: readSidebarStateImpl
+    });
     await writeSidebarStateImpl({
       stats,
       config,
       sessionID: latestUserSessionID,
-      authSource
+      authSource,
+      statePath
     });
     return;
   }
@@ -963,7 +1032,11 @@ async function transformMessagesWithTtc({
     if (!shouldCompressMessage(messageEntry.info, latestUserMessageID, config)) continue;
 
     const sessionID = messageEntry.info.sessionID ?? currentSessionID;
-    const stats = getSessionStats(sessionStats, sessionID);
+    const statePath = getSidebarStatePath(sessionID, env);
+    const stats = await getSessionStats(sessionStats, sessionID, {
+      statePath,
+      readFileImpl: readSidebarStateImpl
+    });
     if (stats && !resetSessions.has(sessionID)) {
       resetSessions.add(sessionID);
       resetLastMessageStats(stats);
@@ -1080,7 +1153,8 @@ async function transformMessagesWithTtc({
       stats,
       config,
       sessionID,
-      authSource
+      authSource,
+      statePath
     });
   }
 }
@@ -1109,6 +1183,7 @@ const TtcMessageTransformPlugin = async ({ client }) => {
     enabled: initialConfig.enabled,
     has_api_key: Boolean(initialConfig.apiKey),
     auth_provider_id: AUTH_PROVIDER_ID,
+    legacy_auth_provider_ids: LEGACY_AUTH_PROVIDER_IDS,
     auth_source: initialApiKeyResolution.source,
     base_url_source: initialConfig.baseUrlSource,
     behavior_sources: initialBehaviorResolution.sources,
@@ -1134,20 +1209,7 @@ const TtcMessageTransformPlugin = async ({ client }) => {
       methods: [
         {
           type: "api",
-          label: "Set TTC API Key",
-          prompts: [
-            {
-              type: "text",
-              key: "apiKey",
-              message: "Enter TTC API key",
-              placeholder: "ttc_..."
-            }
-          ],
-          async authorize(inputs = {}) {
-            const key = String(inputs.apiKey ?? "").trim();
-            if (!key) return { type: "failed" };
-            return { type: "success", key };
-          }
+          label: "The Token Company (TTC) API key"
         }
       ]
     },
@@ -1191,6 +1253,7 @@ export default TtcMessageTransformPlugin;
 
 TtcMessageTransformPlugin._test = {
   AUTH_PROVIDER_ID,
+  LEGACY_AUTH_PROVIDER_IDS,
   COMPRESSION_LEVELS,
   buildTtcPluginConfig,
   getPluginConfigPath,
@@ -1206,6 +1269,7 @@ TtcMessageTransformPlugin._test = {
   resolveEffectiveApiKey,
   resolveSessionIDFromTransformInput,
   createSessionStats,
+  hydrateSessionStatsFromSidebarState,
   resetLastMessageStats,
   recordSkipReason,
   recordProcessedPart,

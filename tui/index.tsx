@@ -2,15 +2,19 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { TuiPlugin, TuiPluginApi, TuiTheme } from "@opencode-ai/plugin/tui";
 import {
+  emptySidebarStateText,
   formatMetricValue,
   formatPartLine,
   getStatusDotColor,
+  loadAuthStatus,
   loadSidebarState,
+  shouldRenderSidebarState,
   statusText
 } from "./sidebar-state.js";
 import { registerTtcSettingsCommand } from "./settings.js";
 
 type SidebarState = Awaited<ReturnType<typeof loadSidebarState>>;
+type AuthStatus = Awaited<ReturnType<typeof loadAuthStatus>>;
 
 function SidebarContent(props: {
   api: TuiPluginApi;
@@ -18,22 +22,30 @@ function SidebarContent(props: {
   theme: TuiTheme;
 }) {
   const [state, setState] = createSignal<SidebarState>(null);
+  const [loadedSessionID, setLoadedSessionID] = createSignal("");
+  const [loadingSessionID, setLoadingSessionID] = createSignal("");
+  const [authStatus, setAuthStatus] = createSignal<AuthStatus>({ hasKey: false, providerID: null, authPath: "" });
   const [refreshCount, setRefreshCount] = createSignal(0);
   const theme = () => props.theme.current;
 
-  const refresh = async () => {
-    setState(await loadSidebarState(props.sessionID));
+  const refresh = async (sessionID = props.sessionID) => {
+    setLoadingSessionID(sessionID);
+    const [nextState, nextAuthStatus] = await Promise.all([
+      loadSidebarState(sessionID),
+      loadAuthStatus()
+    ]);
+
+    if (props.sessionID !== sessionID) return;
+    setState(nextState);
+    setLoadedSessionID(sessionID);
+    setAuthStatus(nextAuthStatus);
+    setLoadingSessionID("");
   };
 
   createEffect(() => {
-    props.sessionID;
-    setState(null);
-    void refresh();
-  });
-
-  createEffect(() => {
+    const sessionID = props.sessionID;
     refreshCount();
-    void refresh();
+    void refresh(sessionID);
   });
 
   const triggerRefresh = (event: { properties?: Record<string, unknown> }) => {
@@ -52,9 +64,49 @@ function SidebarContent(props: {
     unsubscribeSessionStatus();
   });
 
+  const sessionMessageCount = createMemo(() => props.api.state.session.messages(props.sessionID)?.length ?? 0);
+
+  const hasAuth = createMemo(() => authStatus().hasKey);
+
+  const visibleState = createMemo(() => {
+    if (!hasAuth()) {
+      return null; // hide any stale compressed/skipped state once logged out
+    }
+    return shouldRenderSidebarState(state(), loadedSessionID(), props.sessionID) ? state() : null;
+  });
+
+  const isLoadingCurrentSession = createMemo(() => loadingSessionID() === props.sessionID && !visibleState());
+
+  const effectiveStatus = createMemo(() => {
+    if (!hasAuth()) {
+      return "missing_auth";
+    }
+    const current = visibleState();
+    if (current?.status === "missing_auth" && hasAuth()) {
+      return "waiting";
+    }
+    return current?.status;
+  });
+
   const dotColor = createMemo(() => {
-    const current = state();
-    return getStatusDotColor(current?.status, theme());
+    return getStatusDotColor(effectiveStatus(), theme());
+  });
+
+  const statusLine = createMemo(() => {
+    const current = visibleState();
+    if (!current) {
+      if (!hasAuth()) {
+        return "missing TTC auth";
+      }
+      return emptySidebarStateText({
+        loading: isLoadingCurrentSession(),
+        messageCount: sessionMessageCount()
+      });
+    }
+    if (effectiveStatus() === "waiting") {
+      return "authenticated — send a message to start compressing";
+    }
+    return statusText(current);
   });
 
   return (
@@ -62,10 +114,10 @@ function SidebarContent(props: {
       <box flexDirection="row" gap={0}>
         <text fg={dotColor()}>● </text>
         <text fg={theme().text}>Token Compression </text>
-        <text fg={theme().textMuted}>{state()?.config?.model ?? ""}</text>
+        <text fg={theme().textMuted}>{visibleState()?.config?.model ?? ""}</text>
       </box>
-      <text fg={theme().textMuted}>{statusText(state())}</text>
-      <Show when={state()} fallback={<text fg={theme().textMuted}>No session data yet</text>}>
+      <text fg={theme().textMuted}>{statusLine()}</text>
+      <Show when={visibleState()} fallback={<text fg={theme().textMuted}>No metrics for this session yet</text>}>
         {(current) => (
           <box gap={0}>
             <box flexDirection="row" gap={0}>

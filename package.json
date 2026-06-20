@@ -1,6 +1,6 @@
 {
   "name": "@drfok/opencode-ttc-plugin",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": false,
   "type": "module",
   "description": "OpenCode plugin that allows input compression via The Token Company API",
@@ -33,6 +33,7 @@
   "files": [
     "opencode-plugins/ttc-message-transform.js",
     "opencode-plugins/ttc-message-transform-core.js",
+    "lib/auth-store.js",
     "tui/index.tsx",
     "tui/settings.js",
     "tui/sidebar-state.js",

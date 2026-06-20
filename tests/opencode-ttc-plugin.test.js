@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, dirname } from "node:path";
 
 import TtcMessageTransformPlugin from "../opencode-plugins/ttc-message-transform.js";
 import {
@@ -11,6 +11,7 @@ import {
   createSessionStats,
   getPluginConfigPath,
   getSidebarStatePath,
+  hydrateSessionStatsFromSidebarState,
   getAuthStorePath,
   getSkipReasonForText,
   recordProcessedPart,
@@ -31,15 +32,24 @@ import {
   formatMetricValue,
   formatPartLine,
   getStatusDotColor,
+  emptySidebarStateText,
+  loadAuthStatus,
   loadSidebarState,
+  shouldRenderSidebarState,
   statusText
 } from "../tui/sidebar-state.js";
 import {
   getTtcSettingsConfigPath,
+  hasTtcAuthKey,
+  openTtcSettingsMenu,
   registerTtcSettingsCommand,
   resetTtcSettings,
-  updateTtcSetting
+  updateTtcSetting,
+  removeAuthEntry as removeTuiAuthEntry,
+  AUTH_PROVIDER_ID as TUI_AUTH_PROVIDER_ID,
+  KNOWN_MODELS as TUI_KNOWN_MODELS
 } from "../tui/settings.js";
+import { writeAuthEntry as writeTuiAuthEntry } from "../lib/auth-store.js";
 
 function createOutput(text) {
   return {
@@ -527,6 +537,15 @@ test("resolves auth store path from XDG_DATA_HOME", () => {
   assert.equal(path, "/tmp/xdg-data/opencode/auth.json");
 });
 
+test("auth store path falls back to $HOME when XDG_DATA_HOME is relative", () => {
+  const expected = join(homedir(), ".local", "share", "opencode", "auth.json");
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "relative/data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "./data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "data" }), expected);
+  assert.equal(getAuthStorePath({ XDG_DATA_HOME: "" }), expected);
+  assert.equal(getAuthStorePath({}), expected);
+});
+
 test("resolves api key from OpenCode auth store for provider id", async () => {
   const key = await resolveApiKeyFromAuthStore({
     readFileImpl: async () => JSON.stringify({
@@ -649,6 +668,150 @@ test("writes and loads sidebar state by hashed session path", async () => {
   }
 });
 
+test("hydrates session stats from persisted sidebar state before writing new resume metrics", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-resume-state-"));
+
+  try {
+    const priorStats = createSessionStats();
+    recordProcessedPart(priorStats, {
+      charsBefore: 1000,
+      charsAfter: 400,
+      compressed: true,
+      fallback: false,
+      cacheHit: false,
+      tokenSavingsExact: 150
+    });
+
+    const statePath = getSidebarStatePath("sess-1", { XDG_STATE_HOME: tempDir });
+    await writeSidebarState({
+      stats: priorStats,
+      config: baseConfig,
+      sessionID: "sess-1",
+      statePath
+    });
+
+    const persisted = await loadSidebarState("sess-1", { statePath });
+    const hydrated = hydrateSessionStatsFromSidebarState(persisted);
+    assert.equal(hydrated.processed, 1);
+    assert.equal(hydrated.charsBefore, 1000);
+    assert.equal(hydrated.charsAfter, 400);
+    assert.equal(hydrated.exactTokensSaved, 150);
+
+    const output = createOutput("this resumed session prompt should add to the existing persisted metrics");
+    await transformMessagesWithTtc({
+      output,
+      client: createClient(),
+      config: baseConfig,
+      cache: new Map(),
+      sessionStats: new Map(),
+      env: { XDG_STATE_HOME: tempDir },
+      fetchImpl: async () => ({
+        ok: true,
+        async json() {
+          return {
+            output: "compressed after resume",
+            input_tokens: 200,
+            output_tokens: 80
+          };
+        }
+      })
+    });
+
+    const updated = await loadSidebarState("sess-1", { statePath });
+    assert.equal(updated.session.processed, 2);
+    assert.equal(updated.session.compressed, 2);
+    assert.equal(updated.session.charsBefore, 1000 + "this resumed session prompt should add to the existing persisted metrics".length);
+    assert.equal(updated.session.charsAfter, 400 + "compressed after resume".length);
+    assert.equal(updated.session.exactTokensSaved, 270);
+    assert.equal(updated.lastMessage.charsAfter, "compressed after resume".length);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("hydrating sidebar state ignores non-finite numeric counters", () => {
+  const hydrated = hydrateSessionStatsFromSidebarState({
+    schemaVersion: 1,
+    session: {
+      processed: Infinity,
+      compressed: "Infinity",
+      skipped: -2,
+      charsBefore: "120"
+    },
+    lastMessage: {
+      charsBefore: Infinity,
+      tokensSaved: "NaN",
+      partsProcessed: 3
+    }
+  });
+
+  assert.equal(hydrated.processed, 0);
+  assert.equal(hydrated.compressed, 0);
+  assert.equal(hydrated.skipped, 0);
+  assert.equal(hydrated.charsBefore, 120);
+  assert.equal(hydrated.lastMessageCharsBefore, 0);
+  assert.equal(hydrated.lastMessageTokensSaved, 0);
+  assert.equal(hydrated.lastMessagePartsProcessed, 3);
+});
+
+test("concurrent first-use hydration shares one persisted session stats object", async () => {
+  const priorStats = createSessionStats();
+  recordProcessedPart(priorStats, {
+    charsBefore: 1000,
+    charsAfter: 400,
+    compressed: true,
+    fallback: false,
+    cacheHit: false,
+    tokenSavingsExact: 150
+  });
+  const persistedState = JSON.stringify(buildSidebarState({
+    stats: priorStats,
+    config: baseConfig,
+    sessionID: "sess-1"
+  }));
+  const sessionStats = new Map();
+  const writes = [];
+  let readCalls = 0;
+  let releaseHydration;
+  const hydrationStarted = new Promise((resolve) => {
+    releaseHydration = resolve;
+  });
+
+  const makeTransform = (text, compressedText) => transformMessagesWithTtc({
+    output: createOutput(text),
+    client: createClient(),
+    config: baseConfig,
+    cache: new Map(),
+    sessionStats,
+    readSidebarStateImpl: async () => {
+      readCalls += 1;
+      await hydrationStarted;
+      return persistedState;
+    },
+    writeSidebarStateImpl: async ({ stats, config, sessionID, authSource }) => {
+      writes.push(buildSidebarState({ stats, config, sessionID, authSource }));
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          output: compressedText
+        };
+      }
+    })
+  });
+
+  const first = makeTransform("first resumed prompt should keep prior cumulative metrics", "first compressed");
+  const second = makeTransform("second resumed prompt should share hydrated metrics too", "second compressed");
+  releaseHydration();
+  await Promise.all([first, second]);
+
+  assert.equal(readCalls, 1);
+  assert.equal(writes.at(-1).session.processed, 3);
+  assert.equal(writes.at(-1).session.compressed, 3);
+  assert.equal(sessionStats.get("sess-1").processed, 3);
+});
+
 test("loadSidebarState returns null for malformed or missing state", async () => {
   const missing = await loadSidebarState("missing-session", {
     readFileImpl: async () => {
@@ -661,6 +824,17 @@ test("loadSidebarState returns null for malformed or missing state", async () =>
     readFileImpl: async () => "not-json"
   });
   assert.equal(malformed, null);
+});
+
+test("sidebar session switch helpers avoid rendering stale state as zeroed metrics", () => {
+  const currentState = { session: { processed: 2 } };
+
+  assert.equal(shouldRenderSidebarState(currentState, "session-a", "session-a"), true);
+  assert.equal(shouldRenderSidebarState(currentState, "session-a", "session-b"), false);
+  assert.equal(shouldRenderSidebarState(null, "session-a", "session-a"), false);
+  assert.equal(emptySidebarStateText({ loading: true, messageCount: 0 }), "loading session metrics");
+  assert.equal(emptySidebarStateText({ loading: false, messageCount: 0 }), "new session");
+  assert.equal(emptySidebarStateText({ loading: false, messageCount: 3 }), "waiting for first compression");
 });
 
 test("transform writes sidebar state after processing a session message", async () => {
@@ -788,10 +962,32 @@ test("registers plugin auth provider for /connect flow", async () => {
   const client = createClient();
   const plugin = await TtcMessageTransformPlugin({ client });
 
-  assert.equal(plugin.auth.provider, "the-token-company-plugin");
+  assert.equal(plugin.auth.provider, "opencode-ttc-plugin");
   assert.equal(Array.isArray(plugin.auth.methods), true);
   assert.equal(plugin.auth.methods.length > 0, true);
   assert.equal(plugin.auth.methods[0].type, "api");
+});
+
+test("reads legacy auth store entries written under the old provider id", async () => {
+  const key = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": {
+        type: "api",
+        key: "legacy_key"
+      }
+    })
+  });
+  assert.equal(key, "legacy_key");
+});
+
+test("prefers new provider id when both legacy and current entries exist", async () => {
+  const key = await resolveApiKeyFromAuthStore({
+    readFileImpl: async () => JSON.stringify({
+      "the-token-company-plugin": { type: "api", key: "legacy_key" },
+      "opencode-ttc-plugin": { type: "api", key: "current_key" }
+    })
+  });
+  assert.equal(key, "current_key");
 });
 
 test("shows activation and idle summary toasts in TUI", async () => {
@@ -886,6 +1082,123 @@ test("registers TUI settings command and slash aliases", () => {
   assert.equal(typeof command.onSelect, "function");
 });
 
+test("registers /ttc-login and /ttc-logout slash commands", () => {
+  let registeredCallback = null;
+  registerTtcSettingsCommand({
+    command: {
+      register(callback) {
+        registeredCallback = callback;
+        return () => {};
+      }
+    },
+    ui: { dialog: {}, toast() {} }
+  });
+
+  const commands = registeredCallback();
+  const login = commands.find((cmd) => cmd.value === "ttc.login");
+  const logout = commands.find((cmd) => cmd.value === "ttc.logout");
+
+  assert.equal(Boolean(login), true);
+  assert.equal(login.slash.name, "ttc-login");
+  assert.equal(typeof login.onSelect, "function");
+  assert.equal(Boolean(logout), true);
+  assert.equal(logout.slash.name, "ttc-logout");
+  assert.equal(typeof logout.onSelect, "function");
+});
+
+test("/ttc-login never opens a visible secret prompt", () => {
+  let registeredCallback = null;
+  let alertInput = null;
+  let promptOpened = false;
+  const api = {
+    command: {
+      register(callback) {
+        registeredCallback = callback;
+        return () => {};
+      }
+    },
+    ui: {
+      DialogAlert(input) {
+        alertInput = input;
+        return input;
+      },
+      DialogPrompt() {
+        promptOpened = true;
+        return {};
+      },
+      dialog: {
+        replace(render) { render(); }
+      },
+      toast() {}
+    }
+  };
+
+  registerTtcSettingsCommand(api);
+  const login = registeredCallback().find((cmd) => cmd.value === "ttc.login");
+  login.onSelect(api.ui.dialog);
+
+  assert.equal(promptOpened, false);
+  assert.equal(alertInput.title, "Add TTC API Key");
+  assert.equal(alertInput.message.includes("opencode auth login"), true);
+  assert.equal(alertInput.message.includes("opencode-ttc-plugin login"), true);
+});
+
+test("settings menu shows one compact auth row based on persisted auth state", async () => {
+  const tempDataHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-data-"));
+  const tempConfigHome = await mkdtemp(join(tmpdir(), "ttc-menu-auth-config-"));
+  const originalEnv = {
+    XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    TTC_API_KEY: process.env.TTC_API_KEY
+  };
+  process.env.XDG_DATA_HOME = tempDataHome;
+  process.env.XDG_CONFIG_HOME = tempConfigHome;
+  process.env.TTC_API_KEY = "ttc_env_key";
+
+  let latestSelect = null;
+  const api = {
+    ui: {
+      DialogSelect(input) {
+        latestSelect = input;
+        return input;
+      },
+      dialog: {
+        setSize() {},
+        replace(render) { render(); }
+      },
+      toast() {}
+    }
+  };
+
+  try {
+    await openTtcSettingsMenu(api, api.ui.dialog);
+    let authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].value, "ttc-login");
+    assert.equal(authRows[0].title, "Add API key");
+
+    await writeTuiAuthEntry({ apiKey: "ttc_existing_key" });
+    await openTtcSettingsMenu(api, api.ui.dialog);
+    authRows = latestSelect.options.filter((option) => option.value === "ttc-login" || option.value === "ttc-logout");
+    assert.equal(authRows.length, 1);
+    assert.equal(authRows[0].value, "ttc-logout");
+    assert.equal(authRows[0].title, "Remove API key");
+    assert.equal(authRows[0].description, "Revoke saved key");
+  } finally {
+    if (originalEnv.XDG_DATA_HOME === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = originalEnv.XDG_DATA_HOME;
+
+    if (originalEnv.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalEnv.XDG_CONFIG_HOME;
+
+    if (originalEnv.TTC_API_KEY === undefined) delete process.env.TTC_API_KEY;
+    else process.env.TTC_API_KEY = originalEnv.TTC_API_KEY;
+
+    await rm(tempDataHome, { recursive: true, force: true });
+    await rm(tempConfigHome, { recursive: true, force: true });
+  }
+});
+
 test("TUI settings path follows existing XDG config resolution", () => {
   const path = getTtcSettingsConfigPath({ XDG_CONFIG_HOME: "/tmp/xdg-config" });
   assert.equal(path, "/tmp/xdg-config/opencode/ttc-plugin.json");
@@ -950,4 +1263,234 @@ test("TUI settings helper rejects invalid values and resets config", async () =>
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("TUI auth helpers write/remove key under current provider id with secure file mode", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    const written = await writeTuiAuthEntry({
+      apiKey: "ttc_example_key",
+      authFilePath: authPath
+    });
+    assert.equal(written.ok, true);
+    assert.equal(written.providerID, "opencode-ttc-plugin");
+
+    const stored = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(stored["opencode-ttc-plugin"].type, "api");
+    assert.equal(stored["opencode-ttc-plugin"].key, "ttc_example_key");
+
+    const { statSync } = await import("node:fs");
+    const mode = statSync(authPath).mode & 0o777;
+    assert.equal(mode, 0o600, `auth file should be 0o600, got 0o${mode.toString(8)}`);
+    const dirMode = statSync(dirname(authPath)).mode & 0o777;
+    assert.equal(dirMode, 0o700, `auth directory should be 0o700, got 0o${dirMode.toString(8)}`);
+
+    const hasAfter = await hasTtcAuthKey({ authFilePath: authPath });
+    assert.equal(hasAfter.hasKey, true);
+    assert.equal(hasAfter.providerID, "opencode-ttc-plugin");
+
+    const removed = await removeTuiAuthEntry({ authFilePath: authPath });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.removedAny, true);
+
+    const hasAfterRemove = await hasTtcAuthKey({ authFilePath: authPath });
+    assert.equal(hasAfterRemove.hasKey, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("logout deletes targeted provider entries even when stored value is falsy", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-falsy-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({
+      "opencode-ttc-plugin": null,
+      "the-token-company-plugin": "",
+      anthropic: { type: "api", key: "sk-ant-keep" }
+    }, null, 2),
+    "utf8"
+  );
+
+  try {
+    const removed = await removeTuiAuthEntry({ authFilePath: authPath });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.removedAny, true);
+
+    const stored = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(Object.prototype.hasOwnProperty.call(stored, "opencode-ttc-plugin"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(stored, "the-token-company-plugin"), false);
+    assert.equal(stored.anthropic.key, "sk-ant-keep");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("auth store refuses to overwrite a corrupt file", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-corrupt-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(authPath, "{ not valid json,,,", "utf8");
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_new_key",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "auth_store_corrupt");
+
+    const preserved = await readFile(authPath, "utf8");
+    assert.equal(preserved, "{ not valid json,,,");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("auth store write preserves unrelated providers during sequential key rotation", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-race-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    await writeTuiAuthEntry({
+      apiKey: "ttc_first_key",
+      authFilePath: authPath
+    });
+    const intermediate = JSON.parse(await readFile(authPath, "utf8"));
+    intermediate["another-provider"] = { type: "api", key: "other_key" };
+    const { writeFile: realWriteFile, rename: realRename } = await import("node:fs/promises");
+    await realWriteFile(authPath, JSON.stringify(intermediate, null, 2), "utf8");
+
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_second_key",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+
+    const final = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(final["opencode-ttc-plugin"].key, "ttc_second_key");
+    assert.equal(final["another-provider"].key, "other_key");
+    void realRename;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("logout refuses unsupported auth-store paths instead of claiming success", async () => {
+  const result = await removeTuiAuthEntry({
+    authFilePath: "/tmp/opencode-auth-symlink.json",
+    lstatImpl: async () => ({ isFile: () => false })
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "auth_store_not_regular_file");
+  assert.equal(result.removedAny, undefined);
+});
+
+test("login rotates away stale legacy TTC entries and leaves unrelated providers intact", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-rotate-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({
+      "the-token-company-plugin": { type: "api", key: "ttc_old_legacy" },
+      "opencode-ttc-plugin": { type: "api", key: "ttc_old_current" },
+      "anthropic": { type: "api", key: "sk-ant-keepMe" },
+      "openai": { type: "api", key: "sk-oai-keepMe" }
+    }, null, 2),
+    "utf8"
+  );
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_rotated",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.removedLegacyIDs, ["the-token-company-plugin"]);
+
+    const final = JSON.parse(await readFile(authPath, "utf8"));
+    assert.equal(final["opencode-ttc-plugin"].key, "ttc_rotated");
+    assert.equal(final["the-token-company-plugin"], undefined, "legacy id should be cleared on rotation");
+    assert.equal(final["anthropic"].key, "sk-ant-keepMe", "unrelated providers must be preserved");
+    assert.equal(final["openai"].key, "sk-oai-keepMe", "unrelated providers must be preserved");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("login with no legacy entry present reports empty removedLegacyIDs", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-auth-fresh-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+
+  try {
+    const result = await writeTuiAuthEntry({
+      apiKey: "ttc_brand_new",
+      authFilePath: authPath
+    });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.removedLegacyIDs, []);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("loadAuthStatus recognises legacy provider entries", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-tui-authstatus-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  await writeFile(
+    authPath,
+    JSON.stringify({ "the-token-company-plugin": { type: "api", key: "legacy" } }),
+    "utf8"
+  );
+
+  try {
+    const status = await loadAuthStatus({ authFilePath: authPath });
+    assert.equal(status.hasKey, true);
+    assert.equal(status.providerID, "the-token-company-plugin");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("loadAuthStatus and hasAuthEntry treat TTC_API_KEY env as valid auth source", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "ttc-env-auth-"));
+  const authPath = join(tempDir, "opencode", "auth.json");
+  await mkdir(dirname(authPath), { recursive: true });
+  // no key file present -> store reports no key
+
+  const envWithKey = { TTC_API_KEY: "ttc_env_key_123" };
+  const envNoKey = {};
+
+  try {
+    // env short-circuits regardless of store
+    const statusEnv = await loadAuthStatus({ env: envWithKey, authFilePath: authPath });
+    assert.equal(statusEnv.hasKey, true);
+    assert.equal(statusEnv.providerID, "env");
+
+    const statusNoEnv = await loadAuthStatus({ env: envNoKey, authFilePath: authPath });
+    assert.equal(statusNoEnv.hasKey, false);
+
+    // hasAuthEntry (TUI hasTtcAuthKey) also respects env
+    const hasEnv = await hasTtcAuthKey({ env: envWithKey, authFilePath: authPath });
+    assert.equal(hasEnv.hasKey, true);
+    assert.equal(hasEnv.providerID, "env");
+
+    const hasNoEnv = await hasTtcAuthKey({ env: envNoKey, authFilePath: authPath });
+    assert.equal(hasNoEnv.hasKey, false);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("known TTC model list is grounded in current docs", () => {
+  const ids = TUI_KNOWN_MODELS.map((model) => model.id);
+  assert.deepEqual(ids.sort(), ["bear-1.2", "bear-2"].sort());
+  assert.equal(TUI_AUTH_PROVIDER_ID, "opencode-ttc-plugin");
 });
