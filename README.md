@@ -1,6 +1,6 @@
 # Opencode The Token Company Plugin
 
-OpenCode message-transform plugin + sidebar widget for [The Token Company](https://thetokencompany.com/) (TTC, YC W26).
+OpenCode message-transform plugin + sidebar widget for [The Token Company](https://thetokencompany.com/) (YC W26).
 
 TTC compresses LLM prompts by removing low-signal tokens based on context and semantic intent. This plugin wires that into OpenCode so bloated context (long file dumps, verbose tool output, repeated boilerplate) gets shrunk before it hits your LLM provider. You keep the same models, just fewer tokens and faster turns.
 
